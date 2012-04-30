@@ -1,0 +1,51 @@
+#!/usr/local/bin/python
+#================================================================
+# ddms:  Degrees with decimal to degrees/minutes/seconds
+#           $Revision: 1.2 $  $Date: 2003/12/05 00:59:22 $
+#----------------------------------------------------------------
+# Command line options:
+#   ddms DDD.DDDD...
+# Output: same value as DDdMM'SS.S"
+#----------------------------------------------------------------
+
+
+import sys
+from terrapos import *
+
+# - - -   u s a g e   - - -
+
+def usage(*L):
+    """Write a message and stop.
+
+      [ L is a list of strings ->
+          sys.stderr  +:=  (usage message) + (concatenation of L)
+          stop execution ]
+    """
+    sys.stderr.write (
+        "*** Usage:\n"
+        "***   %s DDD.DDDD...\n"
+        "*** where:\n"
+        "***   DDD.DDDD... is an angle in degrees with fraction.\n"
+        "*** %s\n" % ( sys.argv[0], "".join ( L ) ) )
+
+
+
+# - - - - -   m a i n   - - - - -
+
+# [ if command line arguments are valid ->
+#     degrees  :=  first argument as a float
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+argList  =  sys.argv[1:]
+if  len(argList) != 1:
+    usage ( "Provide exactly one argument." )
+try:
+    degrees  =  float(argList[0])
+except ValueError:
+    usage ( "Not a valid floating number: `%s'" % argList[0] )
+
+# [ sys.stdout  +:=  degrees rendered as degrees/minutes/seconds ]
+dms  =  degDMS(degrees)
+print '%dd %d\' %.6f"' % dms
+

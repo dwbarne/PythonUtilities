@@ -1,0 +1,11 @@
+- 0.98760000000000003
+- 1.2344999999999999
+- [list_element1, list_element2, list_element3]
+- key0: value0
+  key1: value1
+  lines: [line 0, line 1, line 2, last line]
+  subdict0: {subdict0_key0: subdict0_value0, subdict0_key1: subdict0_value1}
+  subdict1:
+    subdict1_key0: {subdict2_key0: subdict2_value0, subdict2_key1: subdict2_value1}
+    subdict1_key1: subdict1_value1
+    subdict1_key2: subdict1_value2

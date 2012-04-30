@@ -1,0 +1,676 @@
+#!/usr/local/bin/python
+#================================================================
+# buildmapbase:  Download map tiles and corners from TerraServer.
+#       $Revision: 1.6 $  $Date: 2008/07/30 17:31:47 $
+#----------------------------------------------------------------
+# Command line arguments:
+#   buildmapbase [-k kind] [-m mag] [-b mapbase] corner1 corner2
+# where:
+#   kind        1 for aerial photos, 2 for topo maps; default 2
+#   mag         scale in meters/pixel: 1, 2, 4, 8, ..., 512;
+#               default 4
+#   mapbase     Map-base directory in which to add new tiles and
+#               corners
+#   corner1     One corner of a rectangle to be covered, as a
+#               lat+lon, e.g., "3404n10654w"
+#   corner2     The diagonally opposite corner of the rectangle
+#----------------------------------------------------------------
+# Overall intended function:
+#   [ (TerraServer is responding) and
+#     (we have write access to all the map base files) ->
+#       if the command line arguments are valid ->
+#         sys.stdout  +:=  report on tiles not found
+#         add to the selected map base all corners and tiles
+#         returned by TerraServer that share at least one point
+#         with the rectangle defined by corner1 and corner2
+#       else ->
+#         sys.stderr  +:=  error message ]
+#----------------------------------------------------------------
+
+
+#================================================================
+# Imports
+#----------------------------------------------------------------
+
+#--
+# Standard Python modules
+#--
+
+import sys                      # Basic system interface
+import os                       # Operating system functions
+import base64                   # Decodes base-64 encoding
+
+
+#--
+# Optional Python modules
+#--
+
+import pyTerra                  # TerraServer interface
+from pyTS.SOAPpy import Types as SoapTypes      # SOAP interface types
+
+#--
+# This next import is part of a workaround for some strange
+# bug in or under pyTerra.  Every once in a while it raises
+# xml.sax._exceptions.SAXParseException, and we would prefer
+# to continue rather than to crash if that happens.
+#--
+
+import xml.sax._exceptions as SaxExceptions
+
+#--
+# Shipman's Python library
+#--
+
+import sysargs                  # Command line argument checker
+
+
+#--
+# Modules in the mapping application
+#--
+
+import mapbase                  # TerraServer map corners and tiles
+import terrapos                 # Terrestrial positions & boxes
+
+
+#================================================================
+# Manifest constants
+#----------------------------------------------------------------
+
+#--
+# Constants for command line argument processing
+#--
+
+MAG_CODE_SW        =  "m"       # Option for mag-code
+DEFAULT_MAG_CODE   =  4         # Default mag-code
+
+TILE_KIND_SW       =  "k"       # Option for tile-kind
+DEFAULT_TILE_KIND  =  2         # Default tile-kind
+
+MAP_BASE_SW        =  "b"       # Option for map base directory
+DEFAULT_MAP_BASE   =  "tiles"   # Default map base
+
+switchSpecs  =  [           # Switch argument specifications
+    sysargs.SwitchArg ( MAG_CODE_SW,
+      [ "Magnification in meters/pixel, one of: 1, 2, 4, 8, ..., 512." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( TILE_KIND_SW,
+      [ "Kind of tile: 1 for photos, 2 for topo map tiles." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( MAP_BASE_SW,
+      [ "Specifies a map base directory." ],
+      takesValue=1 ) ]
+
+CORNER1_ARG    =  "corner1"
+CORNER2_ARG    =  "corner2"
+
+posSpecs  =  [              # Positional argument specifications
+    sysargs.PosArg ( CORNER1_ARG,
+      [ "Specifies one corner of a geographic rectangle.",
+        "See documentation for formats.  Examples:",
+        "3404n10654w; 34.0686n106.9051w; 340403.1n1065437.8w." ] ),
+    sysargs.PosArg ( CORNER2_ARG,
+      [ "Specifies the opposite corner of that rectangle." ] ) ]
+
+
+
+#================================================================
+# Functions and classes
+#----------------------------------------------------------------
+
+
+# - - -   f a t a l   - - -
+
+def fatal ( *L ):
+    """Write an epitaph, and die.
+
+      [ L is a list of strings ->
+          sys.stderr  +:=  error message containing the concatenated
+                           elements of L
+          stop execution ]
+    """
+    sys.stderr.write ( "*** Error: %s\n" % "".join(L) )
+    sys.exit(1)
+
+
+# - - - - -   c l a s s   A r g s   - - - - -
+
+
+class Args:
+    """Represents the digested command line arguments.
+
+      Exports:
+        Args():
+          [ if the command line arguments are valid ->
+              return a new Args object representing those arguments
+            else ->
+              sys.stderr  +:=  (usage message) + (error message)
+              stop execution ]
+        .magCode:       [ the effective mag-code as an integer ]
+        .tileKind:      [ the effective tile-kind as an integer ]
+        .mapBase:
+          [ if a map base path was specified ->
+              that path as a string
+            else -> DEFAULT_MAP_BASE ]
+        .geoBox:
+          [ the rectangle described by the corner1 and corner2
+            arguments, as a terrapos.TerraBox object ]
+    """
+
+
+# - - -   A r g s . _ _ i n i t _ _   - - -
+
+    def __init__ ( self ):
+        "Constructor for Args."
+
+        #-- 1 --
+        # [ if sys.argv conforms to the switches described in switchSpecs
+        #   and the positional arguments described in posSpecs ->
+        #     sysArgs  :=  a SysArgs objects representing those arguments
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        sysArgs  =  sysargs.SysArgs ( switchSpecs, posSpecs )
+
+        #-- 2 --
+        # [ if all switch arguments in sysArgs are valid ->
+        #     self  :=  self with invariants in place for those switches
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        self.__checkSwitches ( sysArgs )
+
+        #-- 3 --
+        # [ if all positional arguments in sysArgs are valid ->
+        #     self  :=  self with invariants in place for those arguments
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        self.__checkPositionals ( sysArgs )
+
+
+# - - -   A r g s . _ _ c h e c k S w i t c h e s   - - -
+
+    def __checkSwitches ( self, sysArgs ):
+        """Check and store all switch arguments.
+
+          [ sysArgs is a SysArgs object with our command line ->
+              if all switch arguments in sysArgs are valid ->
+                self  :=  self with invariants in place for those switches
+              else ->
+                sys.stderr  +:=  (usage message) + (error message)
+                stop execution ]
+        """
+
+        #-- 1 --
+        # [ if sysArgs has a valid switch MAG_CODE_SW ->
+        #     self.magCode  :=  that switch as an integer
+        #   else if sysArgs has no switch MAG_CODE_SW ->
+        #     self.magCode  :=  DEFAULT_MAG_CODE
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawMag  =  sysArgs.switchMap[MAG_CODE_SW]
+        if  rawMag is None:
+            self.magCode  =  DEFAULT_MAG_CODE
+        else:
+            try:
+                self.magCode  =  int ( rawMag )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The magnification code is not an integer." )
+
+        #-- 2 --
+        # [ if sysArgs has a valid switch TILE_KIND_SW ->
+        #     self.tileKind  :=  that switch as an integer
+        #   else if sysArgs has no switch TILE_KIND_SW ->
+        #     self.tileKind  := DEFAULT_TILE_KIND
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawKind  =  sysArgs.switchMap[TILE_KIND_SW]
+        if  rawKind is None:
+            self.tileKind  =  DEFAULT_TILE_KIND
+        else:
+            try:
+                self.tileKind  =  int ( rawKind )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The tile kind must be 1 or 2." )
+
+        #-- 3 --
+        # [ if sysArgs has a switch MAP_BASE_SW ->
+        #     self.mapBase  :=  that switch's value
+        #   else ->
+        #     self.mapBase  :=  DEFAULT_MAP_BASE ]
+        self.mapBase  =  sysArgs.switchMap[MAP_BASE_SW]
+        if  self.mapBase is None:
+            self.mapBase  =  DEFAULT_MAP_BASE
+
+
+# - - -   s e l f . _ _ c h e c k P o s i t i o n a l s   - - -
+
+    def __checkPositionals ( self, sysArgs ):
+        """Check and store all positional arguments.
+
+          [ sysArgs is a SysArgs object with our command line ->
+              if all positional arguments in sysArgs are valid ->
+                self  :=  self with invariants in place for those arguments
+                sys.stderr  +:=  (usage message) + (error message)
+                stop execution ]
+        """
+
+        #-- 1 --
+        # [ if CORNER1_ARG of sysArgs is a valid lat-lon ->
+        #     latLon1  :=  that location as a terrapos.LatLon
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        latLon1  =  terrapos.scanLatLon ( sysArgs.posMap[CORNER1_ARG] )
+
+        #-- 2 --
+        # [ if CORNER2_ARG of sysArgs is a valid lat-lon ->
+        #     latLon2  :=  that location as a terrapos.LatLon
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        latLon2  =  terrapos.scanLatLon ( sysArgs.posMap[CORNER2_ARG] )
+
+        #-- 3 --
+        # [ self.geoBox  :=  a new terrapos.TerraBox made from
+        #                    latLon1 and latLon2 ]
+        self.geoBox  =  terrapos.TerraBox ( latLon1, latLon2 )
+
+
+# - - -   g e t T i l e M e t a   - - -
+
+def getTileMeta ( latLon, magCode, tileKind ):
+    """Get metadata for the tile containing the given lat-lon.
+
+      [ (latLon is a terrapos.LatLon object) and
+        (magCode is a mag-code) and
+        (tileKind is a tile-kind) ->
+          if TerraServer has tile metadata for the tile containing
+          latLon and having the given mag & kind ->
+            return that metadata as a pyTerra.TileMeta object
+          else ->
+            sys.stderr  +:=  message
+            stop execution ]
+    """
+
+    #-- 1 --
+    # [ lonLatPt  :=  a SOAP LonLatPt struct representing latLon
+    #   theme     :=  the kind of tile as a pyTerra.Theme
+    #   scale     :=  magCode as a pyTerra.Scale ]
+    lonLatPt      =  SoapTypes.structType()
+    lonLatPt.Lon  =  latLon.lonDeg
+    lonLatPt.Lat  =  latLon.latDeg
+    scale         =  "Scale%dm" % magCode
+    if  args.tileKind == 1:
+        theme  =  "Photo"
+    else:
+        theme  =  "Topo"
+
+    #-- 2 --
+    # [ if TerraServer has tile metadata for point=lonLatPt,
+    #   theme=theme, and scale=scale ->
+    #     result  :=  that metadata as a pyTerra.TileMeta object
+    #   else ->
+    #     sys.stderr  +:=  (usage message) + (error message)
+    #     stop execution ]
+    try:
+        result  =  pyTerra.GetTileMetaFromLonLatPt ( lonLatPt,
+            theme, scale )
+    except pyTerra.pyTerraError, detail:
+        sysargs.usage ( switchSpecs, posSpecs,
+            "GetTileMetaFromLonLatPt failed: %s" % detail )
+
+    #-- 3 --
+    return result
+
+
+# - - -   g e t C o r n e r S e t   - - -
+
+def getCornerSet ( mapBase, magCode ):
+    """Returns a CornerSet, either from the old corners file or new
+
+      [ if mapBase has a corners file for mag=magCode ->
+          return a CornerSet representing that file
+        else ->
+          return a new, empty CornerSet ]
+    """
+
+    #-- 1 --
+    # [ cornerFileName  :=  name of the corners file in mapBase
+    #       for mag=magCode
+    #   result  :=  a new, empty CornerSet object ]
+    cornerFileName  =  mapBase.getCornerFileName ( magCode )
+    result  =  mapbase.CornerSet()
+
+    #-- 2 --
+    # [ if cornerFileName names a readable, valid corners file ->
+    #     result  +:=  corners from that file
+    #   else -> I ]
+    try:
+        result.addFile ( cornerFileName )
+    except IOError:
+        pass
+
+    #-- 3 --
+    return result
+
+
+# - - -  f i l l A l l T i l e s   - - -
+
+def fillAllTiles ( cornerSet, mapBase, swMeta, neMeta, args ):
+    """Download corners and map tiles in the given rectangle.
+
+      [ (cornerSet is a CornerSet object) and
+        (mapBase is a MapBase object) and
+        (swMeta and neMeta are pyTerra.TileMeta objects) and
+        (args is an Args object) ->
+          if swMeta and neMeta are in different UTM zones ->
+            sys.stderr  +:=  (usage message) + (error message)
+            stop execution
+          else ->
+            cornerSet  :=  cornerSet with any missing corners
+                that fall within the rectangle (swMeta,neMeta)
+                added from TerraServer
+            mapBase  :=  mapBase with any missing map tiles of kind
+                args.tileKind that fall within that rectangle added
+                from TerraServer ]
+    """
+
+    #-- 1 --
+    # [ if swMeta and neMeta are in different UTM zones ->
+    #     sys.stderr  +:=  (usage message) + (error message)
+    #     stop execution
+    #   else -> I ]
+    if  swMeta.Id.Scene != neMeta.Id.Scene:
+        sysargs.usage ( switchSpecs, posSpecs,
+            "The rectangle straddles a UTM zone boundary from "
+            "%s to %s" % (swMeta.Id.Scene, neMeta.Id.Scene) )
+
+    #-- 2 --
+    # [ tileId  :=  a SOAP TileId struct copied from swMeta ]
+    tileId  =  SoapTypes.structType()
+    tileId.Scene  =  swMeta.Id.Scene
+    tileId.Scale  =  swMeta.Id.Scale
+    tileId.Theme  =  swMeta.Id.Theme
+
+    #-- 3 --
+    # [ cornerSet  :=  cornerSet with any missing corners
+    #       that fall within the rectangle (swMeta,neMeta)
+    #       added from TerraServer
+    #   mapBase  :=  mapBase with any missing map tiles that
+    #       fall within that rectangle added from TerraServer
+    #   tileId  :=  TileId of the NE-most tile in that rectangle ]
+    print ( "Tile ranges: X=%s:%s Y=%s:%s" %
+            ( swMeta.Id.X, neMeta.Id.X, swMeta.Id.Y, neMeta.Id.Y ) )
+    for  tileId.X in range ( int ( swMeta.Id.X ),
+                             int ( neMeta.Id.X ) + 1 ):
+        for  tileId.Y in range ( int ( swMeta.Id.Y ),
+                                 int ( neMeta.Id.Y ) + 1 ):
+            #-- 3 body --
+            # [ if TerraServer has tiles for tileId ->
+            #     cornerSet  :=  cornerSet with any missing corners
+            #       added from that tile
+            #     mapBase  :=  mapbase with that tile added if missing ]
+            fillTile ( cornerSet, mapBase, tileId, args )
+
+
+# - - -   f i l l T i l e   - - -
+
+def fillTile ( cornerSet, mapBase, tileId, args ):
+    """Download one tile and its metadata and add it if necessary.
+
+      [ (cornerSet is a CornerSet) and
+        (mapBase is a Mapbase) and
+        (tileId is a pyTerra.TileId) and
+        (args is an Args object) ->
+           if TerraServer has tiles for tileId ->
+             cornerSet  :=  cornerSet with any missing corners
+               added from that tile
+             mapBase  :=  mapbase with that tile added if missing ]          
+    """
+
+    #-- 1 --
+    # [ if TerraServer has metadata for tile=tileId ->
+    #     tileMeta  :=  that metadata as a pyTerra.TileMeta
+    #   else ->
+    #     sys.stdout  +:=  message about missing data
+    #     return ]
+    try:
+        tileMeta  =  pyTerra.GetTileMetaFromTileId ( tileId )
+    except pyTerra.pyTerraError, detail:
+        print ( "TerraServer, no such slot: theme=%s, scale=%s, "
+                "scene=%s, x=%s, y=%s" %
+                ( tileId.Theme, tileId.Scale, tileId.Scene,
+                  tileId.X, tileId.Y ) )
+        return
+
+    #-- 2 --
+    # [ cornerSet  :=  cornerSet with any missing corners added
+    #       from tileMeta ]
+    fillAllCorners ( cornerSet, tileMeta, args )
+
+    #-- 3 --
+    # [ if TerraServer has a tile for tileId as specified by args ->
+    #     mapBase  +:=  that tile
+    #   else ->
+    #     sys.stdout  +:=  message about missing tile ]
+    print "(%s,%s)" % (tileId.X, tileId.Y),
+    sys.stdout.flush()
+    addTile ( mapBase, tileId, args )
+
+
+# - - -   f i l l A l l C o r n e r s   - - -
+
+def fillAllCorners ( cornerSet, tileMeta, args ):
+    """Make sure cornerSet has all the corners from tileMeta
+
+      [ (cornerSet is a CornerSet) and
+        (tileMeta is a pyTerra.TileMeta) and
+        (args is an Args object) ->
+          cornerSet  :=  cornerSet with any missing corners added
+              from tileMeta ]
+    """
+
+    #-- 1 --
+    # [ if cornerSet has a corner for tileMeta.SouthWest ->
+    #     I
+    #   else ->
+    #     cornerSet  +:=  a new corner from tileMeta.SouthWest ]
+    fillCorner ( cornerSet, tileMeta.SouthWest,
+                 (int(tileMeta.Id.X), int(tileMeta.Id.Y)), args )
+
+    #-- 2 --
+    # [ same for the other three corners ]
+    fillCorner ( cornerSet, tileMeta.NorthWest,
+                 (int(tileMeta.Id.X), int(tileMeta.Id.Y) + 1), args )
+    fillCorner ( cornerSet, tileMeta.SouthEast,
+                 (int(tileMeta.Id.X) + 1, int(tileMeta.Id.Y)), args )
+    fillCorner ( cornerSet, tileMeta.NorthEast,
+                 (int(tileMeta.Id.X) + 1, int(tileMeta.Id.Y) + 1), args )
+
+
+# - - -   f i l l C o r n e r   - - -
+
+def fillCorner ( cornerSet, lonLatPt, slotCR, args ):
+    """Add corner slotCR at lonLatPt to cornerSet if not already defined.
+
+      [ (cornerSet is a CornerSet) and
+        (lonLatPt is a pyTerra.LonLatPt) and
+        (slotCR is a slot-col-row) and
+        (args is an Args object) ->
+          if cornerSet has a corner for slotCR ->
+            I
+          else ->
+            cornerSet  +:=  a new corner for slotCR at lonLatPt ]
+    """
+
+    #-- 1 --
+    # [ if cornerSet has a corner for slotCR ->
+    #     return
+    #   else -> I ]
+    try:
+        oldCorner  =  cornerSet.getCorner ( slotCR )
+        return
+    except KeyError:
+        pass
+
+    #-- 2 --
+    # [ utm  :=  lonLatPt converted to UTM by pyTerra, as a UTM object ]
+    #--
+    # Note:  the corner UTMs shown on the web site are always
+    # exact multiples of the tile size.  Since the ones from pyTerra
+    # are back-converted from the lat-lon, round them so they
+    # conform to the corners shown on the Info page.
+    #--
+    utmPt  =  pyTerra.ConvertLonLatPtToUtmPt ( lonLatPt )
+    utm  =  mapbase.UTM ( int ( utmPt.Zone ),
+                  int ( round ( float ( utmPt.X ) ) ),
+                  int ( round ( float ( utmPt.Y ) ) ) )
+
+    #-- 3 --
+    # [ tileCorner  :=  a new TileCorner object with
+    #       magCode=args.magCode, slotCR=slotCR, latLon from lonLatPt,
+    #       and utm from utm ]
+    tileCorner  =  mapbase.TileCorner ( args.magCode, slotCR,
+        terrapos.LatLon ( float(lonLatPt.Lat), float(lonLatPt.Lon) ),
+        utm )
+
+    #-- 4 --
+    # [ cornerSet  :=  cornerSet with tileCorner added ]
+    cornerSet.addCorner ( tileCorner )
+
+
+# - - -   a d d T i l e   - - -
+
+def addTile ( mapBase, tileId, args ):
+    """Download a tile to the map base if it is missing.
+
+      [ (mapBase is a MapBase object) and
+        (tileId is a pyTerra.TileId) and
+        (args is an Args object) ->
+          if TerraServer has a map tile for tileId as specified
+          by args ->
+            mapBase  +:=  that tile
+          else ->
+            sys.stdout  +:=  message about missing tile ]
+    """
+
+    #-- 1 --
+    # [ tilePath  :=  path to the name of the tile file in mapBase
+    #       for mag=args.magCode, slotCR from tileId, and
+    #       kind=args.tileKind ]
+    tilePath  =  mapBase.getTileFileName ( args.magCode,
+        (int(tileId.X), int(tileId.Y)), args.tileKind )
+
+    #-- 2 --
+    # [ if a file exists at tilePath ->
+    #     return
+    #   else -> I ]
+    try:
+        statusTuple  =  os.lstat ( tilePath )
+        return
+    except OSError:
+        pass
+
+    #-- 3 --
+    # [ if TerraServer has a tile for tileId ->
+    #     rawImage  :=  that tile as a base-64 encoded JPG or GIF file ]
+    #   else ->
+    #     sys.stdout  +:=  message about a missing tile
+    #     return ]
+    try:
+        rawImage  =  pyTerra.GetTile ( tileId )
+    except pyTerra.pyTerraError, detail:
+        print ( "TerraServer, no tile: theme=%s scale=%s "
+                "scene=%s x=%s y=%s" %
+                ( tileId.Theme, tileId.Scale, tileId.Scene,
+                  tileId.X, tileId.Y ) )
+        return
+    #--
+    # I have no idea why pyTerra sometimes raises the following
+    # exception, but I would prefer the program continue rather
+    # than crashing. Yes, this is a KLUGE.
+    #--
+    except SaxExceptions.SAXParseException, detail:
+        print ( "SAXParseException: %s" % detail )
+        return
+
+    #-- 4 --
+    # [ if we can open tilePath as a new file ->
+    #     that file  :=  base-64 decoded data from rawImage
+    #   else ->
+    #     sys.stdout  +:=  message about not having write access ]
+    try:
+        outFile  =  open ( tilePath, "w" )
+        cookedImage  =  base64.decodestring ( rawImage )
+        outFile.write ( cookedImage )
+        outFile.close()
+    except IOError, detail:
+        print ( "Can't write tile file `%s': %s" %
+                ( tilePath, detail ) )
+
+
+
+# - - - - -   m a i n   - - - - -
+
+#-- 1 --
+# [ if the command line arguments are valid ->
+#     args     :=  those arguments as an Args object
+#     mapBase  :=  a MapBase object representing args.mapBase
+#   else ->
+#     sys.stderr  +:=  (usage message) + (error message)
+#     stop execution ]
+args  =  Args ( )
+mapBase  =  mapbase.MapBase ( args.mapBase )
+
+#-- 2 --
+# [ if TerraServer has tile metadata for the southwest and
+#   northeast corners of the rectangle described in args.geoBox ->
+#     swMeta  :=  the metadata for the SW corner as a pyTerra.TileMeta
+#     neMeta  :=  the metadata for the NE corner as a pyTerra.TileMeta
+#   else ->
+#     sys.stderr  +:=  (usage message) + (error message)
+#     stop execution ]
+swMeta  =  getTileMeta ( args.geoBox.sw, args.magCode, args.tileKind )
+neMeta  =  getTileMeta ( args.geoBox.ne, args.magCode, args.tileKind )
+print ( "Latitude range: %s:%s" %
+        (args.geoBox.sw.latDeg, args.geoBox.ne.latDeg) )
+print ( "Longitude range: %s:%s" %
+        (args.geoBox.sw.lonDeg, args.geoBox.ne.lonDeg) )
+
+#-- 3 --
+# [ if mapBase has a corners file for mag=magCode ->
+#     cornerSet  :=  a CornerSet representing that file
+#   else ->
+#     cornerSet  :=  a new, empty CornerSet ]
+cornerSet  =  getCornerSet ( mapBase, args.magCode )
+
+#-- 4 --
+# [ if swMeta and neMeta are in different UTM zones ->
+#     sys.stderr  +:=  (usage message) + (error message)
+#     stop execution
+#   else ->
+#     cornerSet  :=  cornerSet with any missing corners
+#         that fall within the rectangle (swMeta,neMeta)
+#         added from TerraServer
+#     mapBase  :=  mapBase with any missing map tiles of kind
+#         args.tileKind that fall within that rectangle added
+#         from TerraServer ]
+fillAllTiles ( cornerSet, mapBase, swMeta, neMeta, args )
+
+#-- 5 --
+# [ if we have write access to the corners file for mapBase and
+#   mag=args.magCode ->
+#     that file  :=  cornerSet as a corners file
+#   else ->
+#     sys.stderr  +:=  (error message)
+#     stop execution ]
+cornerFileName  =  mapBase.getCornerFileName ( args.magCode )
+try:
+    cornerSet.writeFile ( cornerFileName )
+except IOError, detail:
+    fatal ( "Can't rewrite corners file `%s': %s" %
+            ( cornerFileName, detail ) )

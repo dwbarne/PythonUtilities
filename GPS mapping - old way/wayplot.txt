@@ -1,0 +1,1459 @@
+#!/usr/local/bin/python
+#================================================================
+# wayplot:  Plot GPS waypoints on a base map.
+#       $Revision: 1.15 $  $Date: 2005/07/07 23:19:40 $
+#----------------------------------------------------------------
+
+PROGRAM_NAME        =  "wayplot"
+EXTERNAL_VERSION    =  "1.0"
+
+
+#----------------------------------------------------------------
+# Command line arguments:
+#   wayplot [option ...] wayfile route-id...
+# where the options are:
+#   -m mag-code    Magnification in meters/pixel; default 4
+#   -k tile-kind   Kind of tile, 1=photo, 2=topo, default 2
+#   -b map-base    Specifies a map base directory
+#   -x extra       Specifies extra context in tiles, default 0.5
+# and the positional arguments are:
+#   wayfile     An XML waypoint file conforming to waypoints.dtd
+#   route-id    Selects a route from the wayfile by its id; default all
+#----------------------------------------------------------------
+# Contents:
+#   1.  Imports
+#   2.  Manifest constants
+#   3.  Functions and classes:
+# class Args:  Digested command-line arguments.
+# class WaySpotSet:  Manages rendering of all waypoints onto map.
+# class WaySpot:  Manages rendering of one waypoint.
+# class MouseTracker:  Widgets for displaying current mouse position.
+# class WayTracker:  Widgets for displaying waypoint information.
+# class App:  The base Tkinter application object.
+# readWaypoints():  Reads the waypoints file, checks route IDs.
+# main
+#----------------------------------------------------------------
+
+
+#================================================================
+# Imports
+#----------------------------------------------------------------
+
+#--
+# Standard Python modules
+#--
+
+import sys                  # Standard system interface
+from math import *          # For pi, etc.
+from Tkinter import *       # Tkinter GUI components
+import tkFont               # Tkinter font stuff
+
+
+#--
+# Modules from Shipman's Python library
+#--
+
+import sysargs              # Command line argument digestion
+
+
+#--
+# Modules specific to this application
+#--
+
+import terrapos             # LatLon and related objects
+import latlonentry          # Widget to display lat-lon coords
+import mapbase              # Base map module
+import mapframe             # Widget to display the base map
+import waypointset          # Represents the waypoints file
+
+
+#================================================================
+# Manifest constants
+#----------------------------------------------------------------
+
+#--
+# Command line arguments
+#--
+
+MAG_CODE_SW         =  "m"          # Switch for magnification
+DEFAULT_MAG_CODE    =  4            # Default mag-code in meters/pixel
+
+TILE_KIND_SW        =  "k"          # Switch for kind of tile (photo/topo)
+DEFAULT_TILE_KIND   =  2            # Default kind: 1=photo, 2=topo
+
+MAP_BASE_SW         =  "b"          # Switch for specifying map base dir.
+DEFAULT_MAP_BASE    =  "tiles"      # Default map base directory
+
+MARGIN_SW           =  "x"          # Switch for extra margin
+DEFAULT_MARGIN      =  0.5          # Default is half a tile size
+
+WAY_FILE_ARG        =  "wayfile"    # Waypoint file name, required
+
+switchSpecs  =  [
+    sysargs.SwitchArg ( MAG_CODE_SW,
+      [ "Magnification in meters pixel, one of: 1, 2, 4, 8, ..., 512" ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( TILE_KIND_SW,
+      [ "Kind of tile: 1 for photos, 2 for topo map tiles." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( MAP_BASE_SW,
+      [ "Specifies a map base directory." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( MARGIN_SW,
+      [ "Include extra space around the outside, in tiles.",
+        "Default is 0.5 (half a tile size)." ],
+      takesValue=1 ) ]
+
+posSpecs  =  [
+    sysargs.PosArg ( WAY_FILE_ARG,
+      [ "Specifies the waypoint file in XML format; must",
+        "conform to the waypoints.dtd DTD; followed by",
+        "zero or more <route> elements by their id=",
+        "attributes.  Default is all routes." ],
+      repeated=1 ) ]
+
+
+#--
+# GUI geometry and other appearance features
+#--
+
+CANVAS_WIDE  =  850             # Width of the map widget
+CANVAS_HIGH  =  500             # Height of the map widget
+
+#--
+# Each plotted waypoint has these parts:
+#   target: A background color, possibly somewhat transparent,
+#           used to set off the label.  All have tag TARGET_TAG,
+#           and each one also has a unique tag (TARGET_PREFIX+label).
+#           For example, waypoint number 12 would have tag "t12".
+#   spot:   The text label for the waypoint.  For waypoint 12,
+#           the text "12".  All have tag SPOT_TAG, and each one also
+#           has a unique tag (SPOT_PREFIX+label) (e.g., "s12").
+#--
+
+TARGET_TAG      =  "b"          # Canvas tag for WaySpot targets
+TARGET_COLOR    =  "#3366ff"    # Color 
+TARGET_STIPPLE  =  "gray50"     # Screen for target transparency
+TARGET_PREFIX   =  "t"          # For forming unique tags on targets
+SPOT_TAG        =  "x"          # Canvas tag for WaySpot's labels
+SPOT_COLOR      =  "#ffffff"    # Color for waypoint display
+SPOT_HI_COLOR   =  "#ffcc66"    # Color for highlighted waypoints
+SPOT_PREFIX     =  "s"          # For forming unique tags on spot labels
+
+XY_WIDTH         =  4           # Number of characters in cursor coords
+WAY_TEXT_HEIGHT  =  6           # Number of lines in waypoint text window
+WAY_TEXT_WIDE    =  40          # Width in characters of waypoint text
+WAY_TEXT_FONT    =  ("new century schoolbook", 12) # Waypoint text font
+
+TITLE_FONT   =  ("new century schoolbook", 16, "bold")      # For medium titles
+BUTTON_FONT  =  ("new century schoolbook", 14, "bold")      # For button labels
+LABEL_FONT   =  ("new century schoolbook", 12)              # For field labels
+TEXT_FONT    =  ("lucidatypewriter", 14, "bold")    # For variable text
+SPOT_FONT_FAMILY  =  "lucidatypewriter"    # Font family for plotted waypoints
+SPOT_FONT_SIZE    =  8          # Font size for plotted waypoints
+SPOT_FONT_WEIGHT  =  "bold"     # Font weight for plotted waypoints
+
+
+#================================================================
+# Functions and classes
+#----------------------------------------------------------------
+
+
+
+# - - - - -   c l a s s   A r g s   - - - - -
+
+class Args:
+    """Represents the digested command line arguments.
+
+      Exports:
+        Args ( ):
+          [ if the command line arguments are valid ->
+              return a new Args object representing those arguments
+            else ->
+              sys.stderr  +:=  (usage message) + (error message)
+              stop execution ]
+        .magCode:       [ the effective mag-code as an integer ]
+        .tileKind:      [ the effective tile-kind as an integer ]
+        .mapBase:
+          [ if a map base path was specified ->
+              that path as a string
+            else -> DEFAULT_MAP_BASE ]
+        .margin:        [ the effective margin as a float ]
+        .wayFileName:
+          [ the waypoint file name as a string ]
+        .routeIDList:
+          [ a list of route IDs specified, possibly empty ]
+    """
+
+
+# - - -   A r g s . _ _ i n i t _ _   - - -
+
+    def __init__ ( self ):
+        "Constructor for Args."
+
+        #-- 1 --
+        # [ if sys.argv conforms to the switches described in switchSpecs
+        #   and the positional arguments described in posSpecs ->
+        #     sysArgs  :=  a SysArgs objects representing those arguments
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        sysArgs  =  sysargs.SysArgs ( switchSpecs, posSpecs )
+
+        #-- 2 --
+        # [ if all switch arguments in sysArgs are valid ->
+        #     self  :=  self with invariants for all switch arguments
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        self.__checkSwitches ( sysArgs )
+
+        #-- 3 --
+        # [ if all positional arguments in sysArgs are valid ->
+        #     self  :=  self with invariants for all positional arguments
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        self.__checkPositionals ( sysArgs )
+
+
+# - - -   A r g s . _ _ c h e c k S w i t c h e s   - - -
+
+    def __checkSwitches ( self, sysArgs ):
+        """Check all switch-type arguments.
+
+          [ sysArgs is our command line arguments as a sysargs.SysArgs ->
+              if all switch arguments in sysArgs are valid ->
+                self  :=  self with invariants for all switch arguments
+              else ->
+                sys.stderr  +:=  (usage message) + (error message)
+                stop execution ]
+        """
+
+        #-- 1 --
+        # [ if sysArgs has a valid switch MAG_CODE_SW ->
+        #     self.magCode  :=  that switch as an integer
+        #   else if sysArgs has no switch MAG_CODE_SW ->
+        #     self.magCode  :=  DEFAULT_MAG_CODE
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawMag  =  sysArgs.switchMap[MAG_CODE_SW]
+        if  rawMag is None:
+            self.magCode  =  DEFAULT_MAG_CODE
+        else:
+            try:
+                self.magCode  =  int ( rawMag )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The magnification code is not an integer." )
+
+        #-- 3 --
+        # [ if sysArgs has a valid switch TILE_KIND_SW ->
+        #     self.tileKind  :=  that switch as an integer
+        #   else if sysArgs has no switch TILE_KIND_SW ->
+        #     self.tileKind  := DEFAULT_TILE_KIND
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawKind  =  sysArgs.switchMap[TILE_KIND_SW]
+        if  rawKind is None:
+            self.tileKind  =  DEFAULT_TILE_KIND
+        else:
+            try:
+                self.tileKind  =  int ( rawKind )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The tile kind must be 1 or 2." )
+
+        #-- 4 --
+        # [ if sysArgs has a switch MAP_BASE_SW ->
+        #     self.mapBase  :=  that switch's value
+        #   else ->
+        #     self.mapBase  :=  DEFAULT_MAP_BASE ]
+        self.mapBase  =  sysArgs.switchMap[MAP_BASE_SW]
+        if  self.mapBase is None:
+            self.mapBase  =  DEFAULT_MAP_BASE
+
+        #-- 5 --
+        # [ if sysArgs has a switch MARGIN_SW ->
+        #     self.mapBase  :=  that switch's value
+        #   else ->
+        #     self.mapBase  :=  DEFAULT_MARGIN ]
+        rawMargin  =  sysArgs.switchMap[MARGIN_SW]
+        if  rawMargin is None:
+            self.margin  =  DEFAULT_MARGIN
+        else:
+            try:
+                self.margin  =  float ( rawMargin )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "Not a valid float: `%s'." % rawMargin )
+
+
+# - - -   A r g s . _ _ c h e c k P o s i t i o n a l s   - - -
+
+    def __checkPositionals ( self, sysArgs ):
+        """Check all positional arguments.
+
+          [ sysArgs is our command line arguments as a sysargs.SysArgs ->
+              if all switch arguments in sysArgs are valid ->
+                self  :=  self with invariants for all switch arguments
+              else ->
+                sys.stderr  +:=  (usage message) + (error message)
+                stop execution ]
+        """
+
+        #-- 1 --
+        # [ sysArgs has a positional argument WAY_FILE_ARG ->
+        #     self.wayFileName  :=  that argument's first element
+        #     self.routeIDList  :=  any elements past the first ]
+        nameList  =  sysArgs.posMap[WAY_FILE_ARG]
+        if  len(nameList) == 0:
+            sysargs.usage ( switchSpecs, posSpecs,
+                "Missing waypoint file name." )
+        self.wayFileName  =  nameList[0]
+        self.routeIDList  =  nameList[1:]
+
+
+
+# - - - - -   c l a s s   W a y S p o t S e t   - - - - -
+
+class WaySpotSet:
+    """Keeps track of displayed waypoints on the map frame.
+
+      Exports:
+        WaySpotSet ( mapFrame, waypointSet, idList ):
+          [ (mapFrame is a MapFrame widget) and
+            (waypointSet is a WaypointSet) and
+            (idList is a list of route IDs to select, or
+            an empty list to select all) ->
+              mapFrame  :=  mapFrame with all visible points from
+                  waypointSet plotted on it ]
+        .mapFrame:      [ as passed to constructor, read-only ]
+        .waypointSet:   [ as passed to constructor, read-only ]
+        .idList:        [ as passed to constructor, read-only ]
+        .getSpot ( label ):
+          [ label is a string ->
+              if label matches the label of a waypoint in self ->
+                return that waypoint as a WaySpot
+              else -> raise KeyError ]
+
+      State/Invariants:
+        .__wayList:
+          [ a list containing WaySpot objects representing the waypoints
+            from self.waypointSet that are visible on self.mapFrame ]
+        .__labelMap:
+          [ a dictionary whose values are the WaySpot objects in self,
+            with the keys the corresponding label strings ]
+    """
+
+
+# - - -   W a y S p o t S e t . g e t S p o t   - - -
+
+    def getSpot ( self, label ):
+        "Find the WaySpot with the given label, if any; may raise KeyError."
+        return self.__labelMap [ label ]
+
+
+# - - -   W a y S p o t S e t . _ _ i n i t _ _   - - -
+
+    def __init__ ( self, mapFrame, waypointSet, idList ):
+        "Constructor for WaySpotSet."
+
+        #-- 1 --
+        self.mapFrame     =  mapFrame
+        self.waypointSet  =  waypointSet
+        self.idList       =  idList
+        self.__wayList    =  []
+        self.__labelMap   =  {}
+
+        #-- 2 --
+        # [ mapFrame  :=  mapFrame with all waypoints from routes
+        #       selected by idList plotted
+        #   self.__wayList  :=  self.__wayList with selected, in-range
+        #       waypoints added in the order they occur in waypointSet
+        #   self.__labelMap  :=  self.__labelMap with entries added for
+        #       selected, in-range waypoints ]
+        if  len(idList) == 0:
+            for  route in waypointSet.genRoutes():
+                self.__addRoute ( route )
+        else:
+            for  id in idList:
+                try:
+                    route  =  waypointSet.getRoute ( id )
+                    self.__addRoute ( route )
+                except KeyError:
+                    pass
+
+
+# - - -   W a y S p o t S e t . _ _ a d d R o u t e   - - -
+
+    def __addRoute ( self, route ):
+        """Add all waypoints from a given route.
+
+          [ (self.__wayList is a list) and
+            (route is a WayRoute object) ->
+              self.mapFrame  :=  self.mapFrame with in-range waypoints
+                  from route added
+              self.__wayList  :=  self.__wayList with WaySpot objects
+                  added corresponding to in-range waypoints from route
+                  added, in the same order ]
+              self.__labelMap  :=  self.__labelMap with entries added for
+                  selected, in-range waypoints ]
+        """        
+
+        #-- 1 --
+        for  waypoint in route.genWaypoints():
+            #-- 1 body --
+            # [ if waypoint is within self.mapFrame ->
+            #     self.mapFrame  :=  self.mapFrame with waypoint added
+            #     self.__wayList  +:=  a new WaySpot object representing
+            #         waypoint plotted on self.mapFrame
+            #   else ->
+            #     sys.stdout  +:=  message about out-of-range waypoint ]
+            label  =  str ( 1 + len ( self.__wayList ) )
+            try:
+                spot  =  WaySpot ( self.mapFrame, waypoint, label )
+                self.__wayList.append ( spot )
+                self.__labelMap [ spot.label ]  =  spot
+            except ValueError, detail:
+                print "Off-map:", waypoint.latLon, waypoint.desc
+
+
+
+# - - - - -   c l a s s   W a y S p o t   - - - - -
+
+class WaySpot:
+    """Represents one waypoint displayed on a MapFrame.
+
+      The actual graphic consists of two parts:
+        - The TARGET is a background polygon of a known color
+          that will make the label legible regardless of the
+          background color.  Currently it's a circle, but it
+          might be a box or lozenge or whatever.  It is also
+          the `target' for mouse clicks.  Drawn first.
+        - The LABEL is the text part of the waypoint.
+          Drawn second so it will appear superimposed on the target.
+
+      Exports:
+        WaySpot ( mapFrame, waypoint, label ):
+          [ (mapFrame is a MapFrame widget) and
+            (waypoint is a Waypoint object) and
+            (label is a string of no more than 2 characters) ->
+              if waypoint is within mapFrame's area ->
+                mapFrame  :=  mapFrame with waypoint displayed
+                    and bearing 
+                return a new WaySpot object representing that rendering
+              else ->
+                raise ValueError ]
+        .mapFrame:      [ as passed to constructor, read-only ]
+        .waypoint:      [ as passed to constructor, read-only ]
+        .label:         [ as passed to constructor, read-only ]
+        .highlight:     # Read-only!
+          [ if self is highlighted -> 1
+            else -> 0 ]
+        .setHighlight(state):
+          [ if state is true ->
+              self  :=  self with highlighted appearance
+            else ->
+              self  :=  self without highlighted appearance ]
+        .xy:
+          [ the (x,y) tuple of the center of self's rendering ]
+        .nwX, .nwY:     [ NW corner of the bounding box of self's target ]
+        .seX, .seY:     [ SE corner of same ]
+        .targetId:
+          [ if self has been plotted ->
+              the canvas ID number of the target under self's label
+            else -> None ]
+        .labelId:
+          [ if self has been plotted ->
+              the canvas ID number of self's label
+            else -> None ]
+
+      State/Invariants:
+        .labelFont:     [ a tkFont.Font for drawing self's label ]
+    """
+
+
+# - - -   W a y S p o t . _ _ s t r _ _   - - -
+
+    def __str__ ( self ):
+        "Display self as a string."
+        return "(%s)%s" % (self.label, self.waypoint)
+
+
+# - - -   W a y S p o t . _ _ i n i t _ _   - - -
+
+    def __init__ ( self, mapFrame, waypoint, label ):
+        "Constructor for WaySpot"
+
+        #-- 1 --
+        self.mapFrame   =  mapFrame
+        self.waypoint   =  waypoint
+        self.label      =  label
+        self.labelId    =  None
+        self.targetId   =  None
+        self.highlight  =  0
+        self.labelFont  =  tkFont.Font ( family=SPOT_FONT_FAMILY,
+            size=SPOT_FONT_SIZE, weight=SPOT_FONT_WEIGHT )
+
+        #-- 2 --
+        # [ if waypoint is within mapFrame's area ->
+        #     self.xy  :=  as invariant
+        #   else ->
+        #     raise ValueError ]
+        self.xy  =  mapFrame.latLonToDisplay ( waypoint.latLon )
+
+        #-- 3 --
+        # [ radius  :=  the length of a line from the center of
+        #       the text to a corner of its enclosing box ]
+        #--
+        # Note:  labelWide is the width of the label in this font,
+        # so the radius is the hypotenuse of a triangle whose sides
+        # are half the width and half the height.
+        #--
+        labelWide  =  self.labelFont.measure ( label )
+        labelHigh  =  self.labelFont.metrics ( "linespace" )
+        radius  =  int ( ( ( labelWide / 2.0 ) ** 2 +
+                           ( labelHigh / 2.0 ) ** 2 ) ** 0.5 )
+
+        #-- 4 --
+        # [ mapFrame.can  :=  mapFrame.can with a hollow circle
+        #       rendered on it, tagged as SPOT_TAG, centered on
+        #       self.xy, and having radius=(radius+1) ]
+        #--
+        # Note:  Circles are drawn so that their borders coincide with
+        # the left and top boundary lines, but inside the right and
+        # bottom boundaries.  So to get a circle symmetric around our
+        # center, we have to move the SE corner one pixel south and east.
+        #-
+        self.nwX  =  self.xy[0] - radius - 1
+        self.nwY  =  self.xy[1] - radius - 1
+        self.seX  =  self.xy[0] + radius + 2
+        self.seY  =  self.xy[1] + radius + 2
+        self.setHighlight(0)
+
+
+# - - -   W a y S p o t . s e t H i g h l i g h t   - - -
+
+    def setHighlight ( self, state ):
+        "Turn highlighting on or off."
+        if  state:
+            self.highlight  =  1
+            self.__plot ( SPOT_HI_COLOR )
+        else:
+            self.highlight  =  0
+            self.__plot ( SPOT_COLOR )
+
+
+# - - -   W a y S p o t . _ _ p l o t   - - -
+
+    def __plot ( self, spotColor ):
+        """Draw self's rendering in the given color.
+
+          [ spotColor is a Tkinter color name ->
+              self.mapFrame  :=  self.mapFrame with self plotted on it
+                  using spotColor ]
+        """
+        #-- 1 --
+        # [ if self.labelId is not None ->
+        #     self.mapFrame  :=  self.mapFrame with objects with IDs
+        #          self.labelId and self.targetId erased
+        #   else -> I ]
+        if  self.labelId is not None:
+            self.mapFrame.can.delete ( self.labelId )
+            self.mapFrame.can.delete ( self.targetId )
+
+        #-- 2 --
+        # [ mapFrame.can  :=  mapFrame.can with a target rendered on
+        #       it, centered on self.xy, tagged as TARGET_TAG and
+        #       as (TARGET_PREFIX+label), and
+        #       inside bounding box self.nwX, .nwY, .seX, .seY} ]
+        uniqueTarget  =  TARGET_PREFIX + self.label
+        self.targetId  =  self.mapFrame.can.create_oval (
+            self.nwX, self.nwY, self.seX, self.seY,
+            tags=(TARGET_TAG, uniqueTarget),
+            outline=spotColor, fill=TARGET_COLOR, stipple=TARGET_STIPPLE )
+
+        #-- 3 --
+        # [ mapFrame.can  :=  mapFrame.can with label rendered
+        #       on it, centered on self.xy, tagged as SPOT_TAG and
+        #       (SPOT_PREFIX+label), and using color=(spotColor)
+        #   self.labelId  :=  the canvas ID of that label ]
+        uniqueSpot  =  SPOT_PREFIX + self.label
+        self.labelId  =  self.mapFrame.can.create_text ( self.xy[0],
+            self.xy[1], anchor=CENTER, font=self.labelFont,
+            fill=spotColor, tags=(SPOT_TAG, uniqueSpot),
+            text=self.label )
+
+
+
+# - - - - -   c l a s s   M o u s e T r a c k e r   - - - - -
+
+class MouseTracker(Frame):
+    """Compound widget to display current mouse position, lat/lon and x/y.
+
+      Exports:
+        MouseTracker ( master, mapFrame ):
+          [ (master is any widget inheriting from Frame) and
+            (mapFrame is a MapFrame widget) ->
+              master  :=  master with a new MouseTracker widget added
+                          but not gridded
+              return that new widget ]
+        .master:        [ as passed to constructor, read-only ]
+        .mapFrame:      [ as passed to constructor, read-only ]
+        .set ( xy ):
+          [ xy is a display position as an (x,y) tuple ->
+              if xy lies on one of self.mapFrame's tiles ->
+                self  :=  self displaying display coordinate xy
+                          and the lat-lon of xy within self.mapFrame
+              else ->
+                self  :=  self showing display coordinate xy and
+                          a blank lat-lon ]
+            #--
+            # Note:  The .set() method is intended to be called by the
+            # handler for the <Motion> event on the canvas.
+            #--
+
+        .clear ():
+          [ self  :=  self showing blank lat-lon and display coordinates ]
+            #--
+            # Note:  The .clear() method is intended to be called by the
+            # handler for the canvas <Leave> event.
+            #--
+
+      Widget layout:
+         0                1   
+        +----------------+------------+
+      0 | .__mouseTrackLabel          |
+        +----------------+------------+
+      1 | .__latLonEntry | .__xyTrack |
+        +----------------+------------+
+
+      Contained widgets:
+        .__mouseTrackLabel:   Label for this entire widget.
+        .__latLonEntry:  A LatLonEntry widget to show the lat-lon.
+        .__xyTrack:  A frame to hold the next four widgets, which are
+                     gridded thusly:
+
+             0           1
+            +-----------+-----------+
+          0 | .__xLabel | .__xValue |
+            +-----------+-----------+
+          1 | .__yLabel | .__yValue |
+            +-----------+-----------+
+
+        .__xLabel:  Label for .__xValue.
+        .__xValue:  Label to show cursor x value.
+        .__yLabel:  Label for .__yValue.
+        .__yValue:  Label to show cursor y value.
+
+      Control variables:
+        .__xCoord:  StringVar for .__xValue
+        .__yCoord:  StringVar for .__yValue
+    """
+
+
+# - - -   M o u s e T r a c k e r . s e t   - - -
+
+    def set ( self, xy ):
+        "Show the display value and, if known, the lat-lon as well."
+
+        #-- 1 --
+        # [ xy is a display location as a 2-tuple (x,y) ->
+        #     self  :=  self showing display coordinates xy ]
+        self.__xCoord.set ( str ( xy[0] ) )
+        self.__yCoord.set ( str ( xy[1] ) )
+
+        #-- 2 --
+        # [ if xy is on a tile known to self.mapFrame ->
+        #     self  :=  self displaying the corresponding lat-lon
+        #   else ->
+        #     self  :=  self with the lat-lon fields cleared ]
+        try:
+            latLon  =  self.mapFrame.displayToLatLon ( xy )
+            self.__latLonEntry.setDMS ( latLon )
+        except ValueError:
+            self.__latLonEntry.clear()
+
+
+# - - -   M o u s e T r a c k e r . c l e a r   - - -
+
+    def clear ( self ):
+        "Clear the lat-lon and display position fields."
+        self.__latLonEntry.clear()
+        self.__xCoord.set ( "" )
+        self.__yCoord.set ( "" )
+
+
+# - - -   M o u s e T r a c k e r . _ _ i n i t _ _   - - -
+
+    def __init__ ( self, master, mapFrame ):
+        "Constructor for MouseTracker widget."
+
+        #-- 1 --
+        self.master    =  master
+        self.mapFrame  =  mapFrame
+
+        #-- 2 --
+        # [ master  :=  master with a new Frame widget added ungridded
+        #   self    :=  that Frame widget ]
+        Frame.__init__ ( self, master, borderwidth=2, relief=RAISED )
+
+        #-- 3 --
+        # [ self  :=  self with all widgets in place ]
+        self.__createWidgets ( )
+
+
+# - - -   M o u s e T r a c k e r . _ _ c r e a t e W i d g e t s   - - -
+
+    def __createWidgets ( self ):
+        """Create widgets for self.
+
+          [ (self is a Frame) and
+            (self.mapFrame as invariant) ->
+              self  :=  self with all widgets in place ]
+        """
+
+        #-- 1 --
+        # [ self  :=  self with a new Label added showing the widget title
+        #   self.__mouseTrackLabel  :=  that Label ]
+        self.__mouseTrackLabel  =  Label ( self,
+            anchor=CENTER, font=TITLE_FONT, text="Cursor position" )
+        rowx  =  0
+        self.__mouseTrackLabel.grid ( row=rowx, column=0, columnspan=9,
+            pady=1, sticky=E+W )
+
+        #-- 2 --
+        # [ self  :=  self with a new LatLonEntry added
+        #   self.__latLonEntry  :=  that LatLonEntry ]
+        self.__latLonEntry  =  latlonentry.LatLonEntry ( self )
+        rowx  =  rowx + 1
+        colx  =  0
+        self.__latLonEntry.grid ( row=rowx, column=colx )
+
+        #-- 3 --
+        # [ self  :=  self with a new frame added containing the
+        #             display position widgets (.__xLabel, etc.)
+        #   self.__xyTrack  :=  that frame ]
+        self.__xyTrack  =  self.__createXYTrack ( )
+        colx  =  colx + 1
+        self.__xyTrack.grid ( row=rowx, column=colx, sticky=N )
+
+
+# - - -   M o u s e T r a c k e r . _ _ c r e a t e X Y T r a c k   - - -
+
+    def __createXYTrack ( self ):
+        """Set up the group of widgets that show the cursor's x-y position.
+
+          [ self is a Frame ->
+              self  :=  self with a new Frame added ungridded containing the
+                        display position widgets (.__xLabel, etc.)
+              self.__xLabel  :=  as invariant
+              self.__xValue  :=  as invariant
+              self.__xCoord  :=  as invariant
+              self.__yLabel  :=  as invariant
+              self.__yValue  :=  as invariant
+              self.__yCoord  :=  as invariant
+              return that Frame ]
+        """
+
+        #-- 1 --
+        # [ self  :=  self with a new Frame added ungridded
+        #   f     :=  that Frame ]
+        f  =  Frame ( self )
+
+        #-- 2 --
+        # [ f  :=  f with a new Label added labeling the X coordinate
+        #   self.__xLabel  :=  that Label ]
+        self.__xLabel  =  Label ( f, font=LABEL_FONT,
+            text="x:" )
+        rowx  =  colx  =  0
+        self.__xLabel.grid ( row=rowx, column=colx, sticky=E )
+
+        #-- 3 --
+        # [ f  :=  f with a new Label added displaying the X coordinate
+        #   self.__xCoord  :=  a new StringVar
+        #   self.__xValue  :=  that Label, slaved to self.__xCoord ]
+        self.__xCoord  =  StringVar()
+        self.__xValue  =  Label ( f, font=TEXT_FONT, relief=SUNKEN,
+            textvariable=self.__xCoord, width=XY_WIDTH )
+        colx  =  colx + 1
+        self.__xValue.grid ( row=rowx, column=colx, sticky=W )
+
+        #-- 4 --
+        # [ f  :=  f with a new Label added labeling the Y coordinate
+        #   self.__yLabel  :=  that Label ]
+        self.__yLabel  =  Label ( f, font=LABEL_FONT,
+            text="y:" )
+        rowx  =  rowx + 1
+        colx  =  0
+        self.__yLabel.grid ( row=rowx, column=colx, sticky=E )
+
+        #-- 5 --
+        # [ f  :=  f with a new Label added displaying the Y coordinate
+        #   self.__yCoord  :=  a new StringVar
+        #   self.__yValue  :=  that Label, slaved to self.__yCoord ]
+        self.__yCoord  =  StringVar()
+        self.__yValue  =  Label ( f, font=TEXT_FONT, relief=SUNKEN,
+            textvariable=self.__yCoord, width=XY_WIDTH )
+        colx  =  colx + 1
+        self.__yValue.grid ( row=rowx, column=colx, sticky=W )
+
+        #-- 6 --
+        return f
+
+
+# - - - - -   c l a s s   W a y T r a c k e r   - - - - -
+
+class WayTracker(Frame):
+    """The widgets that display the information about a waypoint.
+
+      Exports:
+        WayTracker ( master )
+          [ master is a Frame ->
+              master  :=  master with a new WayTracker added
+              return that new WayTracker ]
+        .set ( waySpot ):
+          [ waySpot is a WaySpot ->
+              self  :=  self displaying the label, lat-lon, and
+                        description from waySpot ]
+        .clear():
+          [ self  :=  self with all information erased ]
+
+      Widget layout:
+             0                1
+            +----------------+---------------+
+          0 | .__mainLabel                   |
+            +----------------+---------------+
+          1 | .__wayNoLabel  | .__wayNoText  |
+            +----------------+---------------+
+          2 | .__latLonLabel | .__latLonText |
+            +----------------+---------------+
+          3 | .__wayDesc                     |
+            +----------------+---------------+
+
+      Widgets:
+        .__mainLabel:  Main label for this widget.
+        .__wayNoLabel:  Label for .__wayNoText.
+        .__wayNoText:  Label displaying the waypoint number (`label').
+        .__latLonLabel:  Label for .__latLonText.
+        .__latLonText:  Label displaying the latitude-longitude (the
+                        value from the Waypoint object, not a value
+                        derived from display coordinates).
+        .__wayDesc:  Text widget showing the long description of the waypoint.
+
+      Control variables:
+        .__wayNoVar:  StringVar for .__wayNoText.
+        .__latLonVar:  StringVar for .__latLonText.
+    """
+
+
+# - - -   W a y T r a c k e r . s e t   - - -
+
+    def set ( self, waySpot ):
+        "Display the information from waySpot in self."
+
+        #-- 1 --
+        # [ self.__wayNoText  :=  self.__wayNoText displaying
+        #       waySpot.label ]
+        self.__wayNoVar.set ( waySpot.label )
+
+        #-- 2 --
+        # [ self.__latLonText  :=  self.__latLonText displaying
+        #       waySpot.waypoint.latLon ]
+        self.__latLonVar.set ( str ( waySpot.waypoint.latLon ) )
+
+        #-- 3 --
+        # [ self.__wayDesc  :=  self.__wayDesc cleared ]
+        self.__wayDesc.delete ( "1.0", END )
+
+        # [ self.__wayDesc  :=  self.__wayDesc displaying
+        #       waySpot.waypoint.desc ]
+        if  waySpot.waypoint.desc is not None:
+            self.__wayDesc.insert ( "1.0", waySpot.waypoint.desc )
+
+
+# - - -   W a y T r a c k e r . c l e a r   - - -
+
+    def clear ( self ):
+        "Clear all fields in self."
+        self.__wayNoVar.set ( "" )
+        self.__latLonVar.set ( "" )
+        self.__wayDesc.delete ( "1.0", END )
+
+
+# - - -   W a y T r a c k e r . _ _ i n i t _ _   - - -
+
+    def __init__ ( self, master ):
+        "Constructor for WayTracker."
+        #-- 1 --
+        # [ master  :=  master with a new Frame added
+        #   self    :=  that Frame ]
+        Frame.__init__ ( self, master, relief=RIDGE, borderwidth=3 )
+
+        #-- 2 --
+        # [ self  :=  self with a new Label added with the main label
+        #   self.__mainLabel  :=  that Label ]
+        self.__mainLabel  =  Label ( self, font=LABEL_FONT,
+            text="Click on a waypoint to display it here." )
+        rowx  =  colx  =  0
+        self.__mainLabel.grid ( row=rowx, column=colx, columnspan=9,
+            sticky=E+W, pady=1 )
+
+        #-- 3 --
+        # [ self  :=  self with a new Label added
+        #   self.__wayNoLabel  :=  that Label ]
+        self.__wayNoLabel  =  Label ( self, font=LABEL_FONT,
+            text="Waypoint #:" )
+        rowx  =  rowx + 1
+        colx  =  0
+        self.__wayNoLabel.grid ( row=rowx, column=colx, sticky=E,
+            pady=1 )
+
+        #-- 4 --
+        # [ self.__wayNoVar   :=  a new StringVar
+        #   self  :=  self with a new Label added slaved to that StringVar
+        #   self.__wayNoText  :=  that new Label ]
+        self.__wayNoVar  =  StringVar()
+        self.__wayNoText  =  Label ( self, relief=SUNKEN,
+            font=TEXT_FONT, textvariable=self.__wayNoVar )
+        colx  =  colx + 1
+        self.__wayNoText.grid ( row=rowx, column=colx, sticky=W )
+
+        #-- 5 --
+        # [ self  :=  self with a new Label added
+        #   self.__latLonLabel  :=  that new Label ]
+        self.__latLonLabel  =  Label ( self, font=LABEL_FONT,
+            text="Lat/Lon:" )
+        rowx  =  rowx + 1
+        colx  =  0
+        self.__latLonLabel.grid ( row=rowx, column=colx, sticky=E,
+            pady=1 )
+
+        #-- 6 --
+        # [ self.__latLonVar  :=  a new StringVar
+        #   self  :=  self with a new Label added, slaved to that StringVar
+        #   self.__latLonText  :=  that Label ]
+        self.__latLonVar  =  StringVar ()
+        self.__latLonText  =  Label ( self, relief=SUNKEN,
+            font=WAY_TEXT_FONT, textvariable=self.__latLonVar )
+        colx  =  colx + 1
+        self.__latLonText.grid ( row=rowx, column=colx, sticky=W )
+
+        #-- 7 --
+        # [ self  :=  self with a new Text widget added
+        #   self.__wayDesc  :=  that Text widget ]
+        self.__wayDesc  =  Text ( self, font=WAY_TEXT_FONT, wrap=WORD,
+            height=WAY_TEXT_HEIGHT, width=WAY_TEXT_WIDE, takefocus=0 )
+        rowx  =  rowx + 1
+        self.__wayDesc.grid ( row=rowx, column=0, columnspan=9,
+            sticky=E+W )
+
+
+
+# - - - - -   c l a s s   A p p   - - - - -
+
+class App(Frame):
+    """Root object of the GUI application.
+
+      Exports:
+        App ( waypointSet, geoBox, args ):
+          [ (waypointSet is a WaypointSet object) and
+            (geoBox is a TerraBox object) and
+            (args is an Args object) ->
+              if the map base named by mapBaseName is readable
+              and contains at least one tile in geoBox ->
+                return a new Tkinter root window that displays geoBox's
+                area in that map base, with the waypoints from waypointSet
+                selected by routeIDList overlaid on it, and appearance
+                determined by args
+              else ->
+                sys.stderr  +:=  error message
+                stop execution ]
+        .waypointSet:       [ as passed to constructor, read-only ]
+        .geoBox:            [ as passed to constructor, read-only ]
+        .mapBaseName:
+          [ effective map base name ]
+        .mapBase:
+          [ a MapBase representing self.mapBaseName ]
+        .routeIDList:
+          [ effective list of route IDs, empty to select all routes ]
+        .magCode:
+          [ effective mag-code of map ]
+        .tileKind:
+          [ effective tile-kind of map ]
+        .waySpotSet:
+          [ a WaySpotSet object keeping track of the renderings of the
+            waypoints in self.waypointset depicted on self.mapFrame ]
+        .selectedSpot:
+          [ if no waypoint in self is selected -> None
+            else -> the selected WaySpot ]
+
+      Widget layout:
+          0
+        +-------------+
+      0 | .mapFrame   |     MapFrame showing the base map
+        +-------------+
+      1 | .__controls |     All other buttons, etc.
+        +-------------+        
+
+        Column 0 and row 0 are stretchable.
+
+      Widgets inside .__controls:
+        .__mouseTracker:
+          [ a MouseTracker widget that displays the mouse's x-y position
+            and lat-long when known and is blanked otherwise ]
+        .__wayTracker:
+          [ a WayTracker widget that displays the last waypoint
+            selected by the user, when known ]
+        .__quitButton:      [ ye olde Quitte Buttone ]
+
+      Handlers (all for events on self.mapFrame.can):
+        <Button-1>:  If the user left-clicks an unselected waypoint,
+          display that waypoint's information in self.__wayTracker.
+          If the waypoint is already selected, unselect it.
+        <Motion>:  Display the cursor's CANVAS position (not its
+          WINDOW position) in self.__mouseTracker.
+            ** NOTE!  Because the underlying MapFrame widget already
+          binds to the <Motion> event (so that the user can drag
+          the canvas around with Button-2), use add="+" in the call
+          to .bind() so that both handlers will be called on motion.
+        <Leave>:  Clear self.__mouseTracker.
+    """
+
+
+# - - -   A p p . _ _ i n i t _ _   - - -
+
+    def __init__ ( self, waypointSet, geoBox, args ):
+        "Constructor for App."
+
+        #-- 1 --
+        self.waypointSet   =  waypointSet
+        self.geoBox        =  geoBox
+        self.magCode       =  args.magCode
+        self.tileKind      =  args.tileKind
+        self.mapBaseName   =  args.mapBase
+        self.mapBase       =  mapbase.MapBase ( self.mapBaseName )
+        self.routeIDList   =  args.routeIDList
+        self.selectedSpot  =  None
+
+        #-- 2 --
+        # [ <desktop>  :=  <desktop> with a new root window gridded
+        #   self  :=  that window ]
+        Frame.__init__ ( self, None )
+        self.grid(sticky=N+S+E+W)
+
+        #-- 3 --
+        # [ if the map base named by self.mapBaseName is readable
+        #   and contains at least one tile in self.geoBox ->
+        #     self  :=  self with all widgets created
+        #   else ->
+        #     sys.stderr  +:=  error message
+        #     stop execution ]
+        self.__createWidgets ( )
+
+
+# - - -   A p p . _ _ c r e a t e W i d g e t s   - - -
+
+    def __createWidgets ( self ):
+        """Create all widgets in self.
+
+          [ invariants true for self.waypointSet, self.geoBox,
+            self.mapBaseName, and self.routeIDList ->
+              if the map base named by self.mapBaseName is readable
+              and contains at least one tile in self.geoBox ->
+                self  :=  self with all widgets created
+              else ->
+                sys.stderr  +:=  error message
+                stop execution ]
+        """
+
+        #-- 1 --
+        # [ self's root window  :=  self's root window with row 0
+        #       and column 0 made stretchable
+        #   self  :=  self with row 0 and column 0 made stretchable ]
+        top  =  self.winfo_toplevel()
+        top.rowconfigure ( 0, weight=1 )
+        top.columnconfigure ( 0, weight=1 )
+        self.rowconfigure ( 0, weight=1 )
+        self.columnconfigure ( 0, weight=1 )
+
+        #-- 2 --
+        # [ self  :=  self with a new MapFrame widget added and gridded
+        #   self.mapFrame  :=  that widget ]
+        self.mapFrame  =  mapframe.MapFrame ( self,
+            self.geoBox,                    # lat-lon rectangle of interest
+            self.mapBase,                   # map base
+            self.magCode,                   # magnification code
+            self.tileKind,                  # kind of tile
+            (CANVAS_WIDE, CANVAS_HIGH) )    # Display size of canvas
+        rowx  =  0
+        self.mapFrame.grid ( row=rowx, column=0, sticky=N+S+E+W )
+        magBox  =  self.mapFrame.magBox
+        print ( "TerraServer tiles: x=%d:%d, y=%d:%d" %
+                ( magBox.cornerSet.cornerBase[0],
+                  magBox.cornerSet.cornerLimit[0],
+                  magBox.cornerSet.cornerBase[1],
+                  magBox.cornerSet.cornerLimit[1] ) )
+        print  "Lat-lon range:", self.geoBox
+
+        #-- 3 --
+        # [ self.mapFrame  :=  self.mapFrame displaying the waypoints
+        #     from self.waypointSet
+        #   self.waySpotSet  :=  as invariant ]
+        self.waySpotSet  =  WaySpotSet ( self.mapFrame,
+            self.waypointSet, self.routeIDList )
+
+        #-- 4 --
+        # [ self  :=  self with a new frame added and gridded and
+        #       containing all other widgets
+        #   self.__controls  :=  that new frame ]
+        self.__createControls ( )
+        rowx  =  rowx + 1
+        self.__controls.grid ( row=rowx, column=0, sticky=E+W )
+
+
+# - - -   A p p . _ _ c r e a t e C o n t r o l s   - - -
+
+    def __createControls ( self ):
+        """Add to self.__controls all widgets other than self.mapFrame.
+
+          [ self is a Frame ->
+              self  :=  self with a new frame added and gridded and
+                  containing all other widgets
+              self.__controls  :=  that new frame ]
+        """
+
+        #-- 1 --
+        # [ self  :=  self with a new frame added ungridded
+        #   self.__controls  :=  that new frame ]
+        self.__controls  =  Frame ( self )
+
+        #-- 2 --
+        # [ self.__controls  :=  self.__controls with a new MouseTracker
+        #       widget added and gridded that tracks the mouse on
+        #       self.mapFrame
+        #   self.__mouseTracker  :=  that widget ]
+        self.__mouseTracker  =  MouseTracker ( self.__controls,
+            self.mapFrame )
+        rowx  =  0
+        colx  =  0
+        self.__mouseTracker.grid ( row=rowx, column=colx, sticky=NW )
+
+        #-- 3 --
+        # [ self.__controls  :=  self.__controls with a new
+        #       WayTracker widget added and gridded
+        #   self.__wayTracker  :=  that widget ]
+        self.__wayTracker  =  WayTracker ( self.__controls )
+        colx  =  colx + 1
+        self.__wayTracker.grid ( row=rowx, column=colx, sticky=NW )
+
+        #-- 4 --
+        # [ self.__controls  :=  self.__controls with a Quit button added
+        #       and gridded
+        #   self.__quitButton  :=  that button ]
+        self.__quitButton  =  Button ( self.__controls,
+            font=BUTTON_FONT,
+            command=self.quit, text="Quit" )    
+        colx  =  colx + 1
+        self.__quitButton.grid ( row=rowx, column=colx, sticky=N+W+S )
+
+        #-- 5 --
+        # [ self  :=  self with all handlers in place ]
+        self.__createHandlers ( )
+
+
+# - - -   A p p . _ _ c r e a t e H a n d l e r s   - - -
+
+    def __createHandlers ( self ):
+        "Create all handlers for self."
+
+        #-- 1 --
+        # [ self  :=  self with the canvas's <Button-1> bound to
+        #             self.__b1Handler ]
+        self.mapFrame.can.bind ( "<Button-1>", self.__b1Handler )
+
+        #-- 2 --
+        # [ self  :=  self with the canvas's <Motion> bound to
+        #             self.__motionHandler, preserving existing
+        #             bindings ]
+        self.mapFrame.can.bind ( "<Motion>",
+            self.__motionHandler, add="+" )
+
+        #-- 3 --
+        # [ self  :=  self with the canvas's <Leave> bound to
+        #             self.__leaveHandler ]
+        self.mapFrame.can.bind ( "<Leave>", self.__leaveHandler )
+
+
+# - - -   A p p . _ _ b 1 H a n d l e r   - - -
+
+    def __b1Handler ( self, event ):
+        """Handler for <Button-1>.
+
+          [ event is an Event object ->
+              if the event's canvas location is not on WaySpot ->
+                I
+              else if that WaySpot is selected ->
+                self  :=  self with that WaySpot unselected
+              else ->
+                self  :=  self with that WaySpot selected
+                self.__wayTracker  :=  self.__wayTracker showing
+                    the information for the corresponding waySpot
+                    from self.waySpotSet
+              else -> I ]
+        """
+
+        #-- 1 --
+        # [ if self.mapFrame.can has at least one object ->
+        #     targetList  :=  a 1-tuple containing the canvas ID of
+        #         the object closest to the canvas coordinates of
+        #         (event.x, event.y)
+        #   else ->
+        #     targetList  :=  an empty tuple ]
+        canX  =  self.mapFrame.can.canvasx ( event.x )
+        canY  =  self.mapFrame.can.canvasy ( event.y )
+        targetList  =  self.mapFrame.can.find_closest ( canX, canY )
+
+        #-- 2 --
+        # [ if targetIds is empty ->
+        #     return
+        #   else ->
+        #     targetId   :=  first element of targetList
+        #     tagList    :=  sequence of tags for the first element
+        #                    of targetList ]
+        if  len(targetList) == 0:
+            return
+        else:
+            targetId  =  targetList[0]
+            tagList  =  self.mapFrame.can.gettags ( targetId )
+
+        #-- 3 --
+        # [ if tagList contains an element starting with TARGET_PREFIX
+        #   or SPOT_PREFIX ->
+        #     label  :=  the remainder of that element
+        #   else ->
+        #     return ]
+        label  =  None
+        for  tag in tagList:
+            tagPrefix  =  tag[0]
+            if  tagPrefix == TARGET_PREFIX:
+                label  =  tag[1:]
+                break
+            elif  tagPrefix == SPOT_PREFIX:
+                label  =  tag[1:]
+                break
+        if  label is None:
+            return
+
+        #-- 4 --
+        # [ if label matches any member of self.waySpotSet ->
+        #     waySpot  :=  the matching member
+        #   else -> return ]
+        try:
+            waySpot  =  self.waySpotSet.getSpot ( label )
+        except KeyError:
+            return
+                
+        #-- 5 --
+        # [ if waySpot is highlighted ->
+        #     waySpot  :=  waySpot not highlighted
+        #     self.__wayTracker  :=  self.__wayTracker, cleared
+        #   else ->
+        #     self  :=  self with any previously highlighted waySpot cleared
+        #     waySpot  :=  waySpot highlighted
+        #     self.__wayTracker  :=  self.__wayTracker showing waySpot ]
+        if  waySpot.highlight:
+            waySpot.setHighlight ( 0 )
+            self.__wayTracker.clear()
+        else:
+            if  self.selectedSpot is not None:
+                self.selectedSpot.setHighlight ( 0 )
+            self.selectedSpot  =  waySpot
+            waySpot.setHighlight ( 1 )
+            self.__wayTracker.set ( waySpot )
+
+
+# - - -   A p p . _ _ m o t i o n H a n d l e r   - - -
+
+    def __motionHandler ( self, event ):
+        """Handle motion of the cursor within the canvas.
+
+          [ event is an Event object ->
+              self  :=  self displaying the canvas position of event ]
+        """
+
+        #-- 1 --
+        # [ canXY  :=  (canvas X coordinate from event,
+        #              canvas Y coordinate from event) ]
+        canXY  = ( int ( self.mapFrame.can.canvasx ( event.x ) ),
+                   int ( self.mapFrame.can.canvasy ( event.y ) ) )
+
+        #-- 2 --
+        # [ self.__mouseTracker  :=  self.__mouseTracker displaying canXY ]
+        self.__mouseTracker.set ( canXY )
+
+
+# - - -   A p p . _ _ l e a v e H a n d l e r   - - -
+
+    def __leaveHandler ( self, event ):
+        """The cursor has left the canvas; blank .__mouseTracker.
+
+          [ self.__mouseTracker  :=  self.__mouseTracker cleared ]
+        """
+        self.__mouseTracker.clear()
+
+
+
+# - - -   r e a d W a y p o i n t s   - - -
+
+def readWaypoints ( args ):
+    """Read the waypoints file, insure all route IDs are valid.
+
+      [ args is an Args object ->
+          if args.wayFileName names a valid, readable waypoints file
+          containing all selected route IDs from args.routeIDList ->
+            return (a WaypointSet object representing that file,
+                    a TerraBox object representing the bounding box
+                    of all selected routes from args.routeIDList)
+          else ->
+            sys.stderr  +:=  error message
+            stop execution ]
+    """
+
+    #-- 1 --
+    # [ if args.wayFileName names a valid, readable waypoints file ->
+    #     waypointSet  :=  a new WaypointSet object representing
+    #                      that file
+    #   else ->
+    #     sys.stderr  +:=  error message
+    #     stop execution ]
+    try:
+        waypointSet  =  waypointset.WaypointSet ( args.wayFileName )
+    except IOError, detail:
+        sysargs.usage ( switchSpecs, posSpecs,
+          "Invalid waypoint file: %s" % detail )
+
+    #-- 2 --
+    # [ if (args.routeIDList is empty) or
+    #   (all route IDs in args.routeIDList are found in waypointSet) ->
+    #     geoBox  :=  the lat-lon bounding box of all routes in 
+    #                 waypointSet selected by args.routeIDList
+    #   else ->
+    #     sys.stderr  +:=  error message
+    #     stop execution ]
+    if  len(args.routeIDList) == 0:
+        geoBox  =  waypointSet.geoBox
+    else:
+        geoBox  =  None
+        for  id in args.routeIDList:
+            try:
+                route  =  waypointSet.getRoute ( id )
+                if  geoBox is None:
+                    geoBox  =  route.geoBox
+                else:
+                    geoBox  =  geoBox.union ( route.geoBox )
+            except KeyError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                  "Route ID `%s' not found in the waypoint file." % id )
+
+    #-- 3 --
+    return (waypointSet, geoBox)
+
+
+# - - -   e x p a n d M a r g i n s   - - -
+
+def expandMargins ( geoBox, args ):
+    """Implement the `-x margin' option, expanding the geoBox.
+
+      [ (geoBox is a TerraBox object) and
+        (args is an Args object) ->
+          return a new TerraBox representing geoBox expanded by
+          the tile size in args.magCode multiplied by args.margin ]        
+
+      Here's the geometry of the situation:
+
+                             +      T  =  edge size of one tile, equal to
+                            /|            args.magCode meters
+                           / |      A  =  T * args.margin
+                         H/  | A    H  =  A * sqrt(2) by Pythagorean Theorem,
+                         /   |            in meters
+                  T     /    |
+            +----------+-----+      So the resulting box starts with the
+            |          |  A         corners of geoBox, with each corner
+            |          |            getting moved away from the center
+            |   One    |            a distance H.  In practice, that means
+            |   tile   |            moving the NE corner northeast
+            |          |            (bearing 45 degrees or pi/4),
+            |          |            and the SW corner southeast
+            +----------+            (bearing 225 degrees or 5*pi/4).
+    """
+
+    #-- 1 --
+    # [ bearingNE  :=  bearing 45 degrees, in radians
+    #   bearingSW  :=  bearing 225 degrees, in radians
+    #   distAngle  :=  angle subtended by H from the center of the
+    #                  earth, in radians ]
+    bearingNE     =  0.25 * pi
+    bearingSW     =  1.25 * pi
+    tileEdge      =  200.0 * args.magCode       # T in meters
+    marginMeters  =  tileEdge * args.margin     # A in meters
+    hypotMeters   =  sqrt(2.0) * marginMeters   # H in meters
+    hypotFeet     =  hypotMeters * terrapos.FEET_PER_METER
+    distAngle     =  terrapos.feetToAngle ( hypotFeet )
+
+    #-- 2 --
+    # [ ne2  :=  point at bearing=bearingNE and distance=distAngle
+    #            from geoBox.ne
+    #   sw2  :=  point at bearing=bearingSW and distance=distAngle
+    #            from geoBox.sw ]
+    ne2  =  geoBox.ne.offset ( bearingNE, distAngle )
+    sw2  =  geoBox.sw.offset ( bearingSW, distAngle )
+
+    #-- 3 --
+    return terrapos.TerraBox ( sw2, ne2 )
+
+
+
+# - - - - -   w a y p l o t   - -   m a i n   - - - - -
+
+#-- 1 --
+# [ if command line arguments are valid ->
+#     args  :=  an Args object representing those arguments
+#   else ->
+#     sys.stderr  +:=  (usage message) + (error message)
+#     stop execution ]
+args  =  Args()
+
+#-- 2 --
+# [ if args.wayFileName names a valid, readable waypoints file
+#   containing all selected route IDs from args.routeIDList ->
+#     waypointSet  :=  a WaypointSet object representing that file
+#     geoBox       :=  a TerraBox object representing the bounding
+#                      box of all selected routes in lat-lon space
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+waypointSet, geoBox  =  readWaypoints ( args )
+
+#-- 3 --
+# [ fullBox  :=  geoBox expanded according to args.margin ]
+fullBox  =  expandMargins ( geoBox, args )
+
+#-- 4 --
+# [ if the map base named in args.mapBase has at least one tile
+#   defined for mag-code DEFAULT_MAG and area geoBox ->
+#     app  :=  a new App object that will display the waypoints
+#              selected from waypointSet by args.routeIDList
+#              with appearance as dictated by args
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+app  =  App ( waypointSet, fullBox, args )
+app.master.title ( "%s %s" % (PROGRAM_NAME, EXTERNAL_VERSION) )
+
+#-- 5 --
+# [ app  :=  app responding to events ]
+app.mainloop()

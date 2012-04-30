@@ -1,0 +1,67 @@
+
+  Jaime Cisternas <http://ing.uandes.cl/web/jecisternas/>
+
+scientific computing, python, ubuntu, openmp
+------------------------------------------------------------------------
+« Installing Gerris in a Dell Precision 670 running Ubuntu 9.04
+<http://ing.uandes.cl/web/jecisternas/?p=27>
+NRRD (nearly raw raster data) <http://ing.uandes.cl/web/jecisternas/?p=67> »
+
+
+    Taking advantage of openMP from Python
+
+In the book “Python Scripting for Computational Science” (commented in a
+previous post) the authors provide simple wrappers for numpy arrays so
+one can write C/C++ functions that can be called from Python and work on
+the arrays directly. I’ve been using the codes (NumPyArray.cpp and
+NumPyArray.hpp) for a couple of years and I think that they give a
+better (simpler) solution than other more sophisticate approaches.
+
+Here I posted an improved version. First, it implements
+NumPyArray_Complex and NumPyArray_Int classes using NumPyArray_Float as
+a template. Second, it adds a deallocate method. Third, it allows 5-th
+dimensional arrays. But the interesting thing is that we can now include
+some openMP directives and take advantage of multithreading. Have a look
+at the following example that generates the Mandelbrot map.
+
+mandel_hsv
+<http://ing.uandes.cl/web/jecisternas/wp-content/uploads/2009/08/mandel_hsv1.png><http://ing.uandes.cl/web/jecisternas/wp-content/uploads/2009/08/Mandelbrot.zip>
+
+Mandelbrot.zip
+<http://ing.uandes.cl/web/jecisternas/wp-content/uploads/2009/08/Mandelbrot2.zip>
+
+The module can be generated with make_module.sh. It would be great if
+someone can improve the performance of the code. Other examples that can
+be accelerated with openMP are the two-dimensional convolution and the
+product of two matrices.
+
+By the way, I used gcc+libgomp1 version 4.3.3, previous versions don’t
+generate the kind of *.so files that Python requires. I used the
+“-fopenmp” flag for the compilation and “-shared -lgomp” flags for the
+generation of the shared object.
+
+This entry was posted on Martes, Agosto 11th, 2009 at 5:35 pm and is
+filed under Uncategorized <http://ing.uandes.cl/web/jecisternas/?cat=1>.
+You can follow any responses to this entry through the RSS 2.0
+<http://ing.uandes.cl/web/jecisternas/?feed=rss2&p=45> feed. You can
+leave a response <#respond>, or trackback
+<http://ing.uandes.cl/web/jecisternas/wp-trackback.php?p=45> from your
+own site.
+
+
+      Leave a Reply
+
+Click here to cancel reply. </web/jecisternas/?p=45#respond>
+
+Name (required)
+
+Mail (will not be published) (required)
+
+Website
+
+------------------------------------------------------------------------
+
+Jaime Cisternas is proudly powered by WordPress <http://wordpress.org/>
+Entries (RSS) <http://ing.uandes.cl/web/jecisternas/?feed=rss2> and
+Comments (RSS) <http://ing.uandes.cl/web/jecisternas/?feed=comments-rss2>.
+

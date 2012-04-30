@@ -1,0 +1,64 @@
+#!/usr/local/bin/python
+#================================================================
+# ddms:  Degrees with decimal to degrees/minutes/seconds
+#           $Revision: 1.2 $  $Date: 2003/12/05 00:59:07 $
+#----------------------------------------------------------------
+# Command line options:
+#   ddms DD MM SS.S
+# Output: same value as DD.DDD...
+#----------------------------------------------------------------
+
+
+import sys
+from terrapos import *
+
+
+# - - -   u s a g e   - - -
+
+def usage(*L):
+    """Write a message and stop.
+
+      [ L is a list of strings ->
+          sys.stderr  +:=  (usage message) + (concatenation of L)
+          stop execution ]
+    """
+    sys.stderr.write (
+        "*** Usage:\n"
+        "***   %s DD MM [SS.S...]\n"
+        "*** where:\n"
+        "***   DD     is in degrees\n"
+        "***   MM     is in minutes\n"
+        "***   SS.S   is in seconds\n"
+        "*** %s\n" % ( sys.argv[0], "".join ( L ) ) )
+
+
+
+# - - - - -   m a i n   - - - - -
+
+# [ if command line arguments are valid ->
+#     degrees  :=  d+(m/60.)+(s/3600.)
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+argList  =  sys.argv[1:]
+if  not (2 <= len(argList) <= 3):
+    usage ( "Provide two or three arguments (seconds are optional)." )
+try:
+    d  =  float(argList[0])
+except ValueError:
+    usage ( "Not a valid degrees: `%s'" % argList[0] )
+try:
+    m  =  float(argList[1])
+except ValueError:
+    usage ( "Not a valid minutes: `%s'" % argList[1] )
+if  len(argList) > 2:
+    try:
+        s  =  float(argList[2])
+    except:
+        usage ( "Not a valid seconds: `%s'" % argList[1] )
+
+degrees  =  dmsDeg((d,m,s))
+
+# [ sys.stdout  +:=  degrees rendered as degrees/minutes/seconds ]
+print "%.6f" % degrees
+

@@ -1,0 +1,111 @@
+file contents:
+Mini-Application Name: miniFE
+Mini-Application Version: 0.8
+Global Run Parameters: 
+  dimensions: 
+    nx: 120
+    ny: 120
+    nz: 120
+  load_imbalance: 0
+  mv_overlap_comm_comp: 0 (no)
+  number of processors: 1
+  ScalarType: double
+  GlobalOrdinalType: int
+  LocalOrdinalType: int
+Platform: 
+  hostname: glory120
+  kernel name: 'Linux'
+  kernel release: '2.6.18-76chaos'
+  processor: 'x86_64'
+Build: 
+  CXX: '/apps/x86_64/mpi/openmpi/gcc-4.3.4/openmpi-1.4.1/bin/mpicxx'
+  compiler version: 'g++ (GCC) 4.3.4'
+  CXXFLAGS: '-O2'
+  using MPI: yes
+  Threading: none
+Run Date/Time: 2010-06-15, 12:49:57
+Rows-per-proc Load Imbalance: 
+  Largest (from avg, %): 0
+  Std Dev (%): 0
+Matrix structure generation: 
+  Time: 4.46571
+FE assembly: 
+  Time: 52.3313
+Matrix attributes: 
+  Global Nrows: 1771561
+  Global NNZ: 47045881
+  Global Memory (MB): 551.913
+  Pll Memory Overhead (MB): 0
+  Rows per proc MIN: 1771561
+  Rows per proc MAX: 1771561
+  Rows per proc AVG: 1.77156e+06
+  NNZ per proc MIN: 47045881
+  NNZ per proc MAX: 47045881
+  NNZ per proc AVG: 4.70459e+07
+CG solve: 
+  Iterations: 50
+  Final Resid Norm: 4.63648e-06
+  WAXPY Time: 1.63845
+  WAXPY Flops: 7.87968e+08
+  WAXPY Mflops: 480.923
+  DOT Time: 0.972399
+  DOT Flops: 3.456e+08
+  DOT Mflops: 355.41
+  MATVEC Time: 14.0196
+  MATVEC Flops: 4.79868e+09
+  MATVEC Mflops: 342.285
+  Total: 
+    Total CG Time: 16.6814
+    Total CG Flops: 5.93225e+09
+    Total CG Mflops: 355.621
+  Time per iteration: 0.333628
+Total Program Time: 78.6189
+
+
+yaml.load(inputFile) = {'Matrix attributes': {'Rows per proc MIN': 1771561, 'Pll Memory Overhead (MB)': 0, 'Global NNZ': 47045881, 'Global Nrows': 1771561, 'NNZ per proc AVG': 47045900.0, 'Global Memory (MB)': 551.91300000000001, 'Rows per proc AVG': 1771560.0, 'NNZ per proc MIN': 47045881, 'NNZ per proc MAX': 47045881, 'Rows per proc MAX': 1771561}, 'Mini-Application Name': 'miniFE', 'Matrix structure generation': {'Time': 4.4657099999999996}, 'Total Program Time': 78.618899999999996, 'Global Run Parameters': {'number of processors': 1, 'GlobalOrdinalType': 'int', 'ScalarType': 'double', 'LocalOrdinalType': 'int', 'load_imbalance': 0, 'mv_overlap_comm_comp': '0 (no)', 'dimensions': {'nx': 120, 'ny': 120, 'nz': 120}}, 'Mini-Application Version': 0.80000000000000004, 'Platform': {'kernel release': '2.6.18-76chaos', 'hostname': 'glory120', 'processor': 'x86_64', 'kernel name': 'Linux'}, 'Run Date/Time': '2010-06-15, 12:49:57', 'CG solve': {'DOT Time': 0.97239900000000001, 'WAXPY Time': 1.63845, 'WAXPY Flops': 787968000.0, 'DOT Flops': 345600000.0, 'Time per iteration': 0.33362799999999998, 'MATVEC Time': 14.019600000000001, 'Final Resid Norm': 4.6364799999999999e-06, 'Iterations': 50, 'MATVEC Mflops': 342.28500000000003, 'WAXPY Mflops': 480.923, 'Total': {'Total CG Flops': 5932250000.0, 'Total CG Time': 16.6814, 'Total CG Mflops': 355.62099999999998}, 'DOT Mflops': 355.41000000000003, 'MATVEC Flops': 4798680000.0}, 'Build': {'CXX': '/apps/x86_64/mpi/openmpi/gcc-4.3.4/openmpi-1.4.1/bin/mpicxx', 'CXXFLAGS': '-O2', 'compiler version': 'g++ (GCC) 4.3.4', 'using MPI': True, 'Threading': 'none'}, 'FE assembly': {'Time': 52.331299999999999}, 'Rows-per-proc Load Imbalance': {'Largest (from avg, %)': 0, 'Std Dev (%)': 0}}
+
+yaml.dump(y1) =
+Build: {CXX: /apps/x86_64/mpi/openmpi/gcc-4.3.4/openmpi-1.4.1/bin/mpicxx, CXXFLAGS: -O2,
+  Threading: none, compiler version: g++ (GCC) 4.3.4, using MPI: true}
+CG solve:
+  DOT Flops: 345600000.0
+  DOT Mflops: 355.41000000000003
+  DOT Time: 0.97239900000000001
+  Final Resid Norm: 4.6364799999999999e-06
+  Iterations: 50
+  MATVEC Flops: 4798680000.0
+  MATVEC Mflops: 342.28500000000003
+  MATVEC Time: 14.019600000000001
+  Time per iteration: 0.33362799999999998
+  Total: {Total CG Flops: 5932250000.0, Total CG Mflops: 355.62099999999998, Total CG Time: 16.6814}
+  WAXPY Flops: 787968000.0
+  WAXPY Mflops: 480.923
+  WAXPY Time: 1.63845
+FE assembly: {Time: 52.331299999999999}
+Global Run Parameters:
+  GlobalOrdinalType: int
+  LocalOrdinalType: int
+  ScalarType: double
+  dimensions: {nx: 120, ny: 120, nz: 120}
+  load_imbalance: 0
+  mv_overlap_comm_comp: 0 (no)
+  number of processors: 1
+Matrix attributes: {Global Memory (MB): 551.91300000000001, Global NNZ: 47045881,
+  Global Nrows: 1771561, NNZ per proc AVG: 47045900.0, NNZ per proc MAX: 47045881,
+  NNZ per proc MIN: 47045881, Pll Memory Overhead (MB): 0, Rows per proc AVG: 1771560.0,
+  Rows per proc MAX: 1771561, Rows per proc MIN: 1771561}
+Matrix structure generation: {Time: 4.4657099999999996}
+Mini-Application Name: miniFE
+Mini-Application Version: 0.80000000000000004
+Platform: {hostname: glory120, kernel name: Linux, kernel release: 2.6.18-76chaos,
+  processor: x86_64}
+Rows-per-proc Load Imbalance: {'Largest (from avg, %)': 0, Std Dev (%): 0}
+Run Date/Time: 2010-06-15, 12:49:57
+Total Program Time: 78.618899999999996
+
+
+type(y1) = <type 'dict'>
+
+
+y1.keys() =
+['Matrix attributes', 'Mini-Application Name', 'Matrix structure generation', 'Total Program Time', 'Global Run Parameters', 'Mini-Application Version', 'Platform', 'Run Date/Time', 'CG solve', 'Build', 'FE assembly', 'Rows-per-proc Load Imbalance']

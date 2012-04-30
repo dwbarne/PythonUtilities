@@ -1,0 +1,62 @@
+---
+Mini-Application Name: miniFE
+Mini-Application Version: 0.7
+Global Run Parameters: 
+  dimensions: 
+    nx: 200
+    ny: 100
+    nz: 100
+  load_imbalance: 0
+  mv_overlap_comm_comp: 0 (no)
+  number of processors: 1024
+  (per proc) numthreads: 1
+  ScalarType: double
+  GlobalOrdinalType: int
+  LocalOrdinalType: int
+Platform: 
+  hostname: glory144
+  kernel name: Linux
+  kernel release: 2.6.18-76chaos
+  processor: x86_64
+Build: 
+  CXX: /apps/x86_64/mpi/mvapich/intel-11.1-f064-c064/mvapich-1.1/bin/mpicxx
+  compiler version: icpc (ICC) 11.1 20091130
+  CXXFLAGS: -O3
+  using MPI: yes
+  Threading: TPI
+Run Date/Time: 2010-02-20, 12:13:01
+Rows-per-proc Load Imbalance: 
+  Largest (from avg, %): 16.48
+  Std Dev (%): 8.00874
+Matrix structure generation: 
+  Time: 0.011992
+FE assembly: 
+  Time: 0.0412619
+Matrix attributes: 
+  Global Nrows: 2050401
+  Global NNZ: 54451201
+  Global Memory (MB): 638.788
+  Pll Memory Overhead (MB): 13.8452
+  Rows per proc MIN: 1800
+  Rows per proc MAX: 2366
+  Rows per proc AVG: 2002.34
+  NNZ per proc MIN: 47952
+  NNZ per proc MAX: 63063
+  NNZ per proc AVG: 53175
+CG solve: 
+  Iterations: 50
+  Final Resid Norm: 3.23888e-10
+  WAXPY Time: 0.0022831
+  WAXPY Flops: 9.12e+08
+  WAXPY Mflops: 399458
+  DOT Time: 0.0145516
+  DOT Flops: 4e+08
+  DOT Mflops: 27488.3
+  MATVEC Time: 0.00787926
+  MATVEC Flops: 5.55402e+09
+  MATVEC Mflops: 704892
+  Total: 
+    Total CG Time: 0.0268221
+    Total CG Flops: 6.86602e+09
+    Total CG Mflops: 255984
+  Time per iteration: 0.000536442

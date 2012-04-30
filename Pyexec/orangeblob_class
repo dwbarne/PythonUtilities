@@ -1,0 +1,35 @@
+from Tkinter import *
+
+self=Tk()
+
+print "\nThis is step 1 \n"
+
+self.canv=Canvas(self, width=220, height=120)
+self.canv.pack()
+
+self.canv.bind (
+	"<Button-1>",
+	self.__drawOrangeBlob
+)
+
+
+def __drawOrangeBlob (self, event):
+	""" Draws an orange blob in self.canv where the mouse is.
+	"""
+	print "Radius = ",5
+	r=5		#Blob radius
+	
+	self.canv.create_oval (
+		event.x-r, 
+		event.y-r,
+		event.x+r,
+		event.y+r,
+		fill="orange"
+	)
+#		print " Key pressed: ", self.canv.oval.char
+	
+
+	
+print "About to enter mainloop()"
+
+mainloop()

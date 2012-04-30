@@ -1,0 +1,12 @@
+From: dwbarne@sandia.gov
+To: dwbarne@sandia.gov
+Subject: this is a test
+
+This is a test email for python script.
+
+This is line 1.
+This is line 2.
+This is line 3.
+
+This is the end.
+

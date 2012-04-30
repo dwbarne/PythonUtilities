@@ -1,0 +1,513 @@
+#!/usr/local/bin/python
+#================================================================
+# wayimage:  Plot waypoints on a map image.
+#   $Revision: 1.6 $  $Date: 2004/04/22 04:04:56 $
+#----------------------------------------------------------------
+
+PROGRAM_NAME        =  "wayimage"
+EXTERNAL_VERSION    =  "1.0"
+
+#----------------------------------------------------------------
+# Command line options:
+#   wayimage [option]... wayfile route-id...
+# where the options include:
+#       -m mag-code     Magnification in meters/pixel; default 4
+#       -k tile-kind    Kind of tile, 1=photo, 2=topo, default 2
+#       -b map-base     Specifies a map base directory; default "tiles/"
+#       -o image-out    Output image file; default "wayimage.jpg"
+# and positional arguments include:
+#       wayfile     An XML waypoint file conforming to waypoints.dtd
+#       route-id    Selects a route from the wayfile by its id; default all
+# Output:
+# * image-out receives a map image with the selected waypoints
+#   superimposed, in JPG format
+#
+# * sys.stdout receives a report correlating the numbers on the
+#   image with waypoint descriptions
+#----------------------------------------------------------------
+# Contents:
+#   1.  Imports
+#   2.  Manifest constants
+#   3.  Functions and classes
+#   4.  Main
+#----------------------------------------------------------------
+
+#================================================================
+# Imports
+#----------------------------------------------------------------
+
+#--
+# Standard Python modules
+#--
+
+import sys                  # Standard system interface
+import Image as PIL         # Python Imaging Library
+import ImageDraw            # Part of the PIL for drawing on images
+
+
+#--
+# Modules from Shipman's Python library
+#--
+
+import sysargs              # Command line argument digester
+
+
+#--
+# Modules specific to this application
+#--
+
+import mapbase              # Base map module
+import waypointset          # Represents the waypoints file
+
+
+#================================================================
+# Manifest constants
+#----------------------------------------------------------------
+
+MAG_CODE_SW        =  "m"       # Option for mag-code
+DEFAULT_MAG_CODE   =  4         # Default mag-code
+
+TILE_KIND_SW       =  "k"       # Option for tile-kind
+DEFAULT_TILE_KIND  =  2         # Default tile-kind
+
+MAP_BASE_SW        =  "b"       # Option for map base directory
+DEFAULT_MAP_BASE   =  "tiles"   # Default map base
+
+IMAGE_OUT_SW       =  "o"       # Image output option
+DEFAULT_IMAGE_OUT  =  "wayimage.jpg"
+
+WAY_FILE_ARG       =  "wayfile" # Waypoints file argument
+
+switchSpecs  =  [
+    sysargs.SwitchArg ( MAG_CODE_SW,
+      [ "Magnification in meters/pixel, one of: 1, 2, 4, 8, ..., 512." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( TILE_KIND_SW,
+      [ "Kind of tile: 1 for photos, 2 for topo map tiles." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( MAP_BASE_SW,
+      [ "Specifies a map base directory." ],
+      takesValue=1 ),
+    sysargs.SwitchArg ( IMAGE_OUT_SW,
+      [ "Specifies an output image file." ],
+      takesValue=1 ) ]
+
+posSpecs  =  [
+    sysargs.PosArg ( WAY_FILE_ARG,
+      [ "Specifies the waypoint file in XML format; must",
+        "conform to the waypoints.dtd DTD; followed by",
+        "zero or more <route> elements by their id=",
+        "attributes.  Default is all routes." ],
+      repeated=1 ) ]
+
+#--
+# Symbol geometry: see drawPoint()
+#--
+
+SYMBOL_BG      =  "white"       # Background color for waypoint symbol
+SYMBOL_COLOR   =  "red"         # Text color for waypoint symbol
+SYMBOL_POINT   =  "black"       # Reference point in waypoint symbol
+
+
+# - - - - -   c l a s s   A r g s   - - - - -
+
+class Args:
+    """Represents the digested command line arguments.
+
+      Exports:
+        Args():
+          [ if the command line arguments are valid ->
+              return a new Args object representing those arguments
+            else ->
+              sys.stderr  +:=  (usage message) + (error message)
+              stop execution ]
+        .magCode:       [ the effective mag-code as an integer ]
+        .tileKind:      [ the effective tile-kind as an integer ]
+        .mapBase:
+          [ if a map base path was specified ->
+              that path as a string
+            else -> DEFAULT_MAP_BASE ]
+        .imageOut:      [ the effective image output file name ]
+        .wayFileName:
+          [ the waypoint file name as a string ]
+        .routeIDList:
+          [ a list of route IDs specified, possibly empty ]
+
+    """
+
+
+# - - -   A r g s . _ _ i n i t _ _   - - -
+
+    def __init__ ( self ):
+        "Constructor for Args."
+
+        #-- 1 --
+        # [ if sys.argv conforms to the switches described in switchSpecs
+        #   and the positional arguments described in posSpecs ->
+        #     sysArgs  :=  a SysArgs objects representing those arguments
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        sysArgs  =  sysargs.SysArgs ( switchSpecs, posSpecs )
+
+        #-- 2 --
+        # [ if sysArgs has a valid switch MAG_CODE_SW ->
+        #     self.magCode  :=  that switch as an integer
+        #   else if sysArgs has no switch MAG_CODE_SW ->
+        #     self.magCode  :=  DEFAULT_MAG_CODE
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawMag  =  sysArgs.switchMap[MAG_CODE_SW]
+        if  rawMag is None:
+            self.magCode  =  DEFAULT_MAG_CODE
+        else:
+            try:
+                self.magCode  =  int ( rawMag )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The magnification code is not an integer." )
+
+        #-- 3 --
+        # [ if sysArgs has a valid switch TILE_KIND_SW ->
+        #     self.tileKind  :=  that switch as an integer
+        #   else if sysArgs has no switch TILE_KIND_SW ->
+        #     self.tileKind  := DEFAULT_TILE_KIND
+        #   else ->
+        #     sys.stderr  +:=  (usage message) + (error message)
+        #     stop execution ]
+        rawKind  =  sysArgs.switchMap[TILE_KIND_SW]
+        if  rawKind is None:
+            self.tileKind  =  DEFAULT_TILE_KIND
+        else:
+            try:
+                self.tileKind  =  int ( rawKind )
+            except ValueError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                    "The tile kind must be 1 or 2." )
+
+        #-- 4 --
+        # [ if sysArgs has a switch MAP_BASE_SW ->
+        #     self.mapBase  :=  that switch's value
+        #   else ->
+        #     self.mapBase  :=  DEFAULT_MAP_BASE ]
+        self.mapBase  =  sysArgs.switchMap[MAP_BASE_SW]
+        if  self.mapBase is None:
+            self.mapBase  =  DEFAULT_MAP_BASE
+
+        #-- 5 --
+        # [ if sysArgs has a switch IMAGE_OUT_SW ->
+        #     self.imageOut  :=  that switch's value
+        #   else ->
+        #     self.imageOut  :=  DEFAULT_IMAGE_OUT ]
+        self.imageOut  =  sysArgs.switchMap[IMAGE_OUT_SW]
+        if  self.imageOut is None:
+            self.imageOut  =  DEFAULT_IMAGE_OUT
+
+        #-- 6 --
+        # [ sysArgs has a positional argument WAY_FILE_ARG ->
+        #     self.wayFileName  :=  that argument's first element
+        #     self.routeIDList  :=  any elements past the first ]
+        nameList  =  sysArgs.posMap[WAY_FILE_ARG]
+        if  len(nameList) == 0:
+            sysargs.usage ( switchSpecs, posSpecs,
+                "Missing waypoint file name." )
+        self.wayFileName  =  nameList[0]
+        self.routeIDList  =  nameList[1:]
+
+
+
+# - - -   r e a d W a y p o i n t s   - - -
+
+def readWaypoints ( args ):
+    """Read the waypoints file, insure all route IDs are valid.
+
+      [ args is an Args object ->
+          if args.wayFileName names a valid, readable waypoints file
+          containing all selected route IDs from args.routeIDList ->
+            return (a WaypointSet object representing that file,
+                    a TerraBox object representing the bounding box
+                    of all selected routes from args.routeIDList)
+          else ->
+            sys.stderr  +:=  error message
+            stop execution ]
+    """
+
+    #-- 1 --
+    # [ if args.wayFileName names a valid, readable waypoints file ->
+    #     waypointSet  :=  a new WaypointSet object representing
+    #                      that file
+    #   else ->
+    #     sys.stderr  +:=  error message
+    #     stop execution ]
+    try:
+        waypointSet  =  waypointset.WaypointSet ( args.wayFileName )
+    except IOError, detail:
+        sysargs.usage ( switchSpecs, posSpecs,
+          "Invalid waypoint file: %s" % detail )
+
+    #-- 2 --
+    # [ if (args.routeIDList is empty) or
+    #   (all route IDs in args.routeIDList are found in waypointSet) ->
+    #     geoBox  :=  the lat-lon bounding box of all routes in 
+    #                 waypointSet selected by args.routeIDList
+    #   else ->
+    #     sys.stderr  +:=  error message
+    #     stop execution ]
+    if  len(args.routeIDList) == 0:
+        geoBox  =  waypointSet.geoBox
+    else:
+        geoBox  =  None
+        for  id in args.routeIDList:
+            try:
+                route  =  waypointSet.getRoute ( id )
+                if  geoBox is None:
+                    geoBox  =  route.geoBox
+                else:
+                    geoBox  =  geoBox.union ( route.geoBox )
+            except KeyError:
+                sysargs.usage ( switchSpecs, posSpecs,
+                  "Route ID `%s' not found in the waypoint file." % id )
+
+    #-- 3 --
+    return (waypointSet, geoBox)
+
+
+# - - -   b u i l d I m a g e   - - -
+
+def buildImage ( args, magBox, waypointSet ):
+    """Build and write the final image.
+
+      [ (args is the arguments as an Args object) and
+        (magBox is a MagBox object) and
+        (waypointSet is a WaypointSet object) and
+        (args.imageOut can be created as a new file) ->
+          file args.imageOut  :=  a JPG image of magBox, with tiles
+              of kind args.tileKind, with in-range points from waypointSet
+              (selected by args.routeIDList) plotted on it
+          sys.stdout  +:=  (report of in-range and out-of-range points
+              from those waypoints) ]
+          return a list of Waypoint objects representing the in-range
+              points in order of plotting ]
+    """
+
+    #-- 1 --
+    # [ mapImage  :=  a PIL Image object representing all the
+    #       tiles from magBox of kind args.tileKind
+    #   result    :=  a new, empty list ]
+    mapImage  =  magBox.getImage ( args.tileKind, bg="#ffffff" )
+    result  =  []
+    
+
+    #-- 2 --
+    # [ mapImage  :=  mapImage with in-range points from waypointSet,
+    #       selected by args.routeIDList, plotted on it according
+    #       to the geometry of magBox
+    #   sys.stdout  +:=  report on out-of-range points
+    #   result  +:=  in-range points as Waypoints in plot order ]
+    print "Writing image file", args.imageOut
+    if  len(args.routeIDList) == 0:
+        for route in waypointSet.genRoutes():
+            addRoute ( mapImage, magBox, route, result )
+    else:
+        for  id in args.routeIDList:
+            try:
+                route  =  waypointSet.getRoute ( id )
+                addRoute ( mapImage, magBox, route, result )
+            except KeyError:
+                pass
+
+    #-- 3 --
+    # [ file args.imageOut can be created new ->
+    #     file args.imageOut  :=  mapImage as a new JPEG file ]
+    mapImage.save ( args.imageOut, "JPEG" )
+
+    #-- 4 --
+    return result
+
+
+
+# - - -   a d d R o u t e   - - -
+
+def addRoute ( mapImage, magBox, route, inRangeList ):
+    """Add all the in-range waypoints to the image and write the report.
+
+      [ (mapImage is a PIL Image object matching magBox) and
+        (magBox is a MagBox object) and
+        (route is a waypointset.WayRoute object) and
+        (inRangeList is a list of Waypoint objects already plotted) ->
+          mapImage  :=  mapImage with in-range waypoints plotted
+                        on it according to the geometry of magBox
+          sys.stdout  +:=  report on out-of-range waypoints
+          inRangeList  +:=  in-range waypoints in plot order ]
+    """
+
+    #-- 1 --
+    for  waypoint in route.genWaypoints():
+        #-- 1 body --
+        # [ if waypoint is defined within magBox ->
+        #     mapImage  :=  mapImage with waypoint plotted on it
+        #         using len(inRangeList)+1 as the symbol
+        #     inRangeList  +:=  waypoint
+        #   else ->
+        #     sys.stdout  +:=  line showing waypoint as out-of-range ]
+        addPoint ( mapImage, magBox, waypoint, inRangeList )
+
+
+# - - -   a d d P o i n t   - - -
+
+def addPoint ( mapImage, magBox, waypoint, inRangeList ):
+    """Plot one waypoint, or log it as out-of-range.
+
+      [ (mapImage is a PIL Image object matching magBox) and
+        (magBox is a MagBox object) and
+        (waypoint is a Waypoint object) and
+        (inRangeList is a list of Waypoint objects already plotted) ->
+            if waypoint is defined within magBox ->
+              mapImage  :=  mapImage with waypoint plotted on it
+                  using len(inRangeList)+1 as the symbol
+              inRangeList  +:=  waypoint
+            else ->
+              sys.stdout  +:=  line showing waypoint as out-of-range ]
+    """
+
+    #-- 1 --
+    # [ if waypoint is defined within magBox ->
+    #     xy  :=  the corresponding image coordinate
+    #   else ->
+    #     sys.stdout  +:=  line showing waypoint as out-of-range
+    #     return ]
+    try:
+        xy  =  magBox.latLonToDisplay ( waypoint.latLon )
+    except ValueError:
+        print "Outside:", waypoint
+        return
+
+    #-- 2 --
+    # [ mapImage  :=  mapImage with waypoint plotted on it at xy
+    #       using len(inRangeList)+1 as the symbol ]
+    drawPoint ( mapImage, xy, str(len(inRangeList)+1) )
+
+    #-- 3 --
+    # [ inRangeList  +:=  waypoint ]
+    inRangeList.append ( waypoint )
+
+
+# - - -   d r a w P o i n t   - - -
+
+def drawPoint ( mapImage, xy, symbol ):
+    """Plot one waypoint on the map image.
+
+      [ (mapImage is a PIL Image object) and
+        (xy is an (x,y) tuple) and
+        (symbol is a string) ->
+          mapImage  :=  mapImage with symbol plotted on it centered at xy ]
+    """
+
+    #-- 1 --
+    # [ x       :=  x coordinate from xy
+    #   y       :=  y coordinate from xy
+    #   drawer  :=  an ImageDraw object for drawing on mapImage ]
+    x,y  =  xy
+    drawer  =  ImageDraw.ImageDraw ( mapImage )
+
+    #-- 2 --
+    # [ wide  :=  width of symbol in default font
+    #   high  :=  height of symbol in default font
+    #   p0    :=  (x-(width/2), y-(height/2))
+    #   bbox  :=  (x-(width/2), y-(height/2),
+    #              x-(width/2)+width, y-(height/2)+height) ]
+    wide, high  =  drawer.textsize ( symbol )
+    p0  =  (x-wide/2, y-high/2)
+    p1  =  (p0[0]+wide, p0[1]+high)
+    bbox  =  p0+p1    
+    
+    #-- 3 --
+    # [ drawer  :=  drawer with a box at bbox with color SYMBOL_BG ]
+    drawer.rectangle ( bbox, fill=SYMBOL_BG )
+
+    #-- 4 --
+    # [ drawer  :=  drawer with the symbol drawn with its NW corner
+    #       at p0, in color SYMBOL_COLOR ]
+    drawer.text ( p0, symbol, fill=SYMBOL_COLOR )
+
+    #-- 5 --
+    # [ drawer  :=  drawer with a single point drawn at (x,y) in
+    #               color SYMBOL_POINT ]
+    drawer.point ( xy, fill=SYMBOL_POINT )
+
+
+# - - - - -   m a i n   - - - - -
+
+#----------------------------------------------------------------
+# Overall intended function:
+#   [ (wayfile is a readable, valid waypoints file) and
+#     (route-ids, if given, exist in the wayfile) and
+#     (selected map base is readable, valid, and contains at
+#     least one of the selected waypoints) and
+#     (image-out can be created as a new file) ->
+#       image-out  :=  a new image file showing the map base
+#           with selected waypoints from the wayfile displayed
+#           with key numbers
+#       sys.stdout  +:=  report correlating those key numbers
+#           with descriptions of the selected waypoints ]
+#----------------------------------------------------------------
+
+print "=== %s %s ===" % ( PROGRAM_NAME, EXTERNAL_VERSION )
+
+#-- 1 --
+# [ if command line arguments are valid ->
+#     args  :=  an Args object representing those arguments
+#   else ->
+#     sys.stderr  +:=  (usage message) + (error message)
+#     stop execution ]
+args  =  Args()
+
+#-- 2 --
+# [ if args.wayFileName names a valid, readable waypoints file
+#   containing all selected route IDs from args.routeIDList ->
+#     waypointSet  :=  a WaypointSet object representing that file
+#     geoBox       :=  a TerraBox object representing the bounding
+#                      box of all selected routes in lat-lon space
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+waypointSet, geoBox  =  readWaypoints ( args )
+
+#-- 3 --
+# [ if the map base named in args.mapBase has at least one tile
+#   defined for args.magCode and area geoBox ->
+#     mapBase  :=  a MapBase object representing args.mapBase
+#     magBox   :=  a MagBox representing all known corners of
+#         magnification args.magCode that adjoin slots overlapping
+#         geoBox
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+mapBase  =  mapbase.MapBase ( args.mapBase )
+try:
+    magBox  =  mapbase.MagBox ( mapBase, int(args.magCode), geoBox )
+    print ( "TerraServer tiles: x=%d:%d, y=%d:%d" %
+            ( magBox.cornerSet.cornerBase[0],
+              magBox.cornerSet.cornerLimit[0],
+              magBox.cornerSet.cornerBase[1],
+              magBox.cornerSet.cornerLimit[1] ) )
+except ValueError, detail:
+    sys.stderr.write ( "*** No waypoints in the map base: %s\n" % detail )
+    sys.exit ( 1 )
+
+#-- 4 --
+# [ if file args.imageOut can be created new ->
+#     file args.imageOut  :=  a JPG image of magBox, with tiles
+#         of kind args.tileKind, with in-range points from waypointSet
+#         (selected by args.routeIDList) plotted on it
+#     sys.stdout  +:=  (report of out-of-range points from those waypoints)
+#     pointList  :=  list of in-range waypoints in plot order ]
+pointList  =  buildImage ( args, magBox, waypointSet )
+
+#-- 5 --
+# [ sys.stdout  +:=  report of waypoints in pointList ]
+for  i in range(len(pointList)):
+    point  =  pointList[i]
+    print ( "%3d: %s %s" %
+            ( i+1, point.latLon, point.desc ) )

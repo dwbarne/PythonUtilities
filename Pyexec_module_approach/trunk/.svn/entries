@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wc-entries
+   xmlns="svn:">
+<entry
+   committed-rev="2"
+   name=""
+   committed-date="2006-05-23T20:31:05.531250Z"
+   url="file:///D:/SVN%20Repository/Pyexec_module_approach/trunk"
+   last-author="Daniel"
+   kind="dir"
+   uuid="81469a0f-84a8-674e-a336-5b94042f472d"
+   repos="file:///D:/SVN%20Repository/Pyexec_module_approach"
+   revision="2"/>
+<entry
+   committed-rev="2"
+   name="computer_names.txt"
+   text-time="2006-05-23T20:49:50.015625Z"
+   committed-date="2006-05-23T20:31:05.531250Z"
+   checksum="3287218942b31ec9ecde81834bea05a7"
+   last-author="Daniel"
+   kind="file"
+   prop-time="2006-05-23T20:49:49.937500Z"/>
+<entry
+   committed-rev="1"
+   name="pyexec_mod.py"
+   text-time="2006-05-23T20:49:50.031250Z"
+   committed-date="2006-05-23T19:48:21.578125Z"
+   checksum="0f94cb9ae1b64d9bf9700bb5089d2feb"
+   last-author="Daniel"
+   kind="file"
+   prop-time="2006-05-23T20:49:49.968750Z"/>
+<entry
+   committed-rev="1"
+   name="system_data.py"
+   text-time="2006-05-23T20:49:50.046875Z"
+   committed-date="2006-05-23T19:48:21.578125Z"
+   checksum="b42cef0d645965439622d8a84a0af556"
+   last-author="Daniel"
+   kind="file"
+   prop-time="2006-05-23T20:49:49.984375Z"/>
+</wc-entries>

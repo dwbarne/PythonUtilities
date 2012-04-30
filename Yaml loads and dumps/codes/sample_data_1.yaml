@@ -1,0 +1,61 @@
+---
+Mini-Application Name: miniFE
+Mini-Application Version: 0.7
+Global Run Parameters: 
+  dimensions: 
+    nx: 180
+    ny: 180
+    nz: 180
+  load_imbalance: 0
+  mv_overlap_comm_comp: 0 (no)
+  number of processors: 48
+  ScalarType: double
+  GlobalOrdinalType: int
+  LocalOrdinalType: int
+Platform: 
+  hostname: xtplogin01
+  kernel name: Linux
+  kernel release: 2.6.16.60-0.39_1.0102.4545.2.2.41-ss
+  processor: x86_64
+Build: 
+  CXX: /opt/cray/xt-asyncpe/3.3/bin/CC
+  compiler version: /opt/cray/xt-asyncpe/3.3/bin/CC: INFO: linux target is being used
+  CXXFLAGS: -O3
+  using MPI: yes
+  Threading: none
+Run Date/Time: 2010-05-19, 17:18:27
+Rows-per-proc Load Imbalance: 
+  Largest (from avg, %): 0
+  Std Dev (%): 0
+Matrix structure generation: 
+  Time: 0.483164
+FE assembly: 
+  Time: 3.69747
+Matrix attributes: 
+  Global Nrows: 5929741
+  Global NNZ: 158340421
+  Global Memory (GB): 1.81377
+  Pll Memory Overhead (MB): 6.44222
+  Rows per proc MIN: 121500
+  Rows per proc MAX: 129076
+  Rows per proc AVG: 123536
+  NNZ per proc MIN: 3208094
+  NNZ per proc MAX: 3415958
+  NNZ per proc AVG: 3.29876e+06
+CG solve: 
+  Iterations: 50
+  Final Resid Norm: 1.63777e-06
+  WAXPY Time: 0.194424
+  WAXPY Flops: 2.65939e+09
+  WAXPY Mflops: 13678.3
+  DOT Time: 0.171039
+  DOT Flops: 1.1664e+09
+  DOT Mflops: 6819.48
+  MATVEC Time: 1.28696
+  MATVEC Flops: 1.61507e+10
+  MATVEC Mflops: 12549.5
+  Total: 
+    Total CG Time: 1.6576
+    Total CG Flops: 1.99765e+10
+    Total CG Mflops: 12051.4
+  Time per iteration: 0.0331521

@@ -1,0 +1,103 @@
+#!/usr/local/bin/python
+#================================================================
+# routebox:  What is the bounding box of a specific route?
+#       $Revision: 1.5 $  $Date: 2009/10/04 20:25:22 $
+#----------------------------------------------------------------
+# Usage:
+#   routebox wayfile [route-id]
+# where:
+#   wayfile     Names a waypoint file in XML conforming to
+#               waypoints.dtd
+#   route-id    Is the `id=' attribute of a route in that file;
+#               default is all routes
+# Output:  A range of latitudes and longitudes that covers all
+# the waypoints in that route.
+#----------------------------------------------------------------
+
+
+#================================================================
+# Imports
+#----------------------------------------------------------------
+
+import sys                  # Standard Python system interface
+import waypointset          # Represents the waypoints file
+
+
+# - - -   l a t L o n F o r m a t   - - -
+
+def latLonFormat ( latLon ):
+    """Formats a lat-long in the way expected by `buildmapbase'.
+
+      [ latLon is a terrapos.TerraPosition object ->
+          return latLon as a string with `n/s' and `e/w' directions ]
+    """
+    #-- 1 --
+    # [ ns  :=  latitude as "n" for north, "s" for south
+    #   ew  :=  longitude as "e" for east, "w" for west ]
+    if  latLon.latDeg < 0:  ns  =  "s"
+    else:                   ns  =  "n"
+
+    if  latLon.lonDeg < 0:  ew  =  "w"
+    else:                   ew  =  "e"
+
+    #-- 2 --
+    # [ return (abs(latLon.latDeg) + ns + abs(latLon.lonDeg) + ew ]
+    return "%.5f%s%.5f%s" % ( abs(latLon.latDeg), ns,
+                              abs(latLon.lonDeg), ew )
+
+
+# - - - - -   m a i n   - - - - -
+
+#-- 1 --
+# [ if the command line arguments are valid ->
+#     wayFileName  :=  name of the waypoints file
+#     routeId      :=  the route-id, or None if omitted
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+argList  =  sys.argv[1:]
+if  not ( 1 <= len(argList) <= 2 ):
+    sys.stderr.write ( "*** Arguments: wayfile route-id\n" )
+    sys.exit(1)
+else:
+    wayFileName  =  argList[0]
+    if  len(argList) > 1:
+        routeId  =  argList[1]
+    else:
+        routeId  =  None
+
+#-- 2 --
+# [ if wayFileName names a readable, valid waypoints file ->
+#     waypointSet  :=  a WaypointSet object representing that file
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+try:
+    waypointSet  =  waypointset.WaypointSet ( wayFileName )
+except IOError, detail:
+    sys.stderr.write ( "*** Can't read the waypoint file '%s': %s\n" %
+                       (wayFileName, detail) )
+    sys.exit(1)
+
+#-- 3 --
+# [ if routeId is None ->
+#     geoBox  :=  bounding box of waypointSet
+#   else if routeId matches a route id in waypointSet ->
+#     geoBox  :=  bounding box of that route in waypointSet
+#   else ->
+#     sys.stderr  +:=  error message
+#     stop execution ]
+if  routeId is None:
+    geoBox  =  waypointSet.geoBox
+else:
+    try:
+        route  =  waypointSet.getRoute ( routeId )
+        geoBox  =  route.geoBox
+    except KeyError:
+        sys.stderr.write ( "*** No such route: %s\n" % routeId )
+        sys.exit(1)
+
+#-- 4 --
+# [ sys.stdout  +:=  geoBox ]
+print latLonFormat ( geoBox.sw )
+print latLonFormat ( geoBox.ne )

@@ -1,0 +1,6 @@
+148   0 211             dark violet
+148   0 211             DarkViolet
+138  43 226             blue violet
+138  43 226             BlueViolet
+160  32 240             purple
+

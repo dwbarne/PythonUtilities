@@ -1,0 +1,5 @@
+- 0.98760000000000003
+- key1: value1
+  key2: value2
+  lines: [line 1, line 2, line 3, last line, .nan, .inf]
+  subdict: {subdict_key1: subdict_value1, subdict_key2: subdict_value2}

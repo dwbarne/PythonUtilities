@@ -1,0 +1,7 @@
+!list of computers for python script pyexec.py
+liberty.sandia.gov
+redstorm.sandia.gov
+reddish.sandia.gov
+my_own_machine's ip address
+nothing
+something
